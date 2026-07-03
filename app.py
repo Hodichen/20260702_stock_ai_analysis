@@ -18,7 +18,7 @@ import requests
 import streamlit as st
 
 APP_TITLE = "台股 AI 個股分析"
-APP_BUILD = "2026-07-03-ai-architecture-v7"
+APP_BUILD = "2026-07-03-ai-architecture-v8"
 FINMIND_API_URL = "https://api.finmindtrade.com/api/v4/data"
 EMBEDDED_FINMIND_TOKENS = ['eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZnJlZW9uZXllYXJhaSIsImVtYWlsIjoiZnJlZW9uZXllYXJhaUBnbWFpbC5jb20ifQ.QrpcS4DVlqm7bdsL-bDmGdNTtg8HKzm2rrwJUtf7v24', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiaG9kaWRpZmlubWluZCIsImVtYWlsIjoiaG9kaWRpQGdtYWlsLmNvbSJ9._w1f1blFk5cVtxYkQdArSPuP2nMbcj0ecB5WUOCp1d8', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiaG9kaWRpIiwiZW1haWwiOiJnZW1pbmkyMDI1MTA4QGdtYWlsLmNvbSJ9.hvVPA_bI3YdsapZTQ5m4bJsAeR61z1NgcXBZlm2m4lw', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiMjAyNWNoZW5jaGVuMjAyNSIsImVtYWlsIjoiMjAyNWNoZW5jaGVuMjAyNUBnbWFpbC5jb20ifQ.IcNKTcRbriGQOcRAH_y13Tif2aYxKjYv5cRtZVkoOHo']
 EMBEDDED_GOOGLE_API_KEYS = ['AIzaSyD41KegJf4ZV1ZpNI2sd4Kd1nJT1HBL_LA', 'AIzaSyD0Mxqd9g8RmAMN6oOSAqi9p8UfudRO8bI', 'AIzaSyAU_Y8Og0wI6HtWLwRNRW7TTGYzyhBlRSY']
@@ -414,11 +414,12 @@ def get_google_keys() -> list[str]:
 
 def _compact_gemini_error(exc: Exception | None) -> str:
     msg = str(exc or "")
-    if "429" in msg or "Too Many Requests" in msg: return "Google Gemini API 額度或速率限制"
-    if "403" in msg: return "Google Gemini API 權限或 key 限制"
-    if "404" in msg: return "Google Gemini 模型名稱可能不可用"
+    if "429" in msg or "Too Many Requests" in msg: return f"Google API 額度或速率限制 ({msg[:60]})"
+    if "403" in msg: return f"Google API 權限或 key 限制 ({msg[:60]})"
+    if "404" in msg: return f"Google API 模型名稱可能不可用 ({msg[:60]})"
+    if "400" in msg: return f"Google API 參數錯誤或不支援工具格式 ({msg[:60]})"
     if not msg: return "Google Gemini 暫時無法回應"
-    return "Google Gemini 呼叫失敗"
+    return f"Google Gemini 呼叫失敗: {msg[:60]}"
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -428,7 +429,7 @@ def _extract_json(text: str) -> dict[str, Any]:
     except Exception:
         m = re.search(r"\{.*\}", text, flags=re.S)
         if not m:
-            raise
+            raise ValueError(f"無法解析 JSON: {text[:100]}")
         return json.loads(m.group(0))
 
 
@@ -436,6 +437,7 @@ def _gemini_request(prompt: str, with_search: bool = False) -> dict[str, Any]:
     keys = get_google_keys()
     if not keys:
         raise RuntimeError("沒有可用的 Google API key")
+    
     configured_model = None
     try:
         configured_model = st.secrets.get("GOOGLE_MODEL")
@@ -443,30 +445,36 @@ def _gemini_request(prompt: str, with_search: bool = False) -> dict[str, Any]:
         configured_model = None
     configured_model = configured_model or os.getenv("GOOGLE_MODEL")
     models = [configured_model] if configured_model else []
-    # 多模型備援：避免單一 preview / flash 名稱不可用時，看起來像按鈕沒反應。
     models += ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
     models = [m for i, m in enumerate(models) if m and m not in models[:i]]
 
     last_exc = None
     for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        base_body = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.25},
-        }
+        
         tool_options = [True, False] if with_search else [False]
         for use_tool in tool_options:
-            body = dict(base_body)
+            body: dict[str, Any] = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.25}
+            }
             if use_tool:
-                body["tools"] = [{"google_search": {}}]
+                # 使用駝峰命名 googleSearch 以符合 Google REST API 規範
+                body["tools"] = [{"googleSearch": {}}]
+            else:
+                # 只有在沒用 Search 時強制套用 JSON mode，避免部分模型產生格式衝突
+                body["generationConfig"]["responseMimeType"] = "application/json"
+                
             for key_idx, key in enumerate(keys, start=1):
                 try:
                     r = requests.post(url, params={"key": key}, json=body, timeout=60)
-                    r.raise_for_status()
+                    if r.status_code != 200:
+                        raise Exception(f"HTTP {r.status_code}: {r.text}")
+                    
                     result = r.json()
                     text = result["candidates"][0]["content"]["parts"][0]["text"]
                     data = _extract_json(text)
-                    data["_ai_key_status"] = f"Gemini 已啟用；模型 {model}；本次使用 API key 池第 {key_idx} 組。"
+                    data["_ai_key_status"] = f"Gemini 成功；模型 {model}；Key #{key_idx}；Search={use_tool}"
                     return data
                 except Exception as exc:
                     last_exc = exc
@@ -504,7 +512,6 @@ JSON schema:
 
 
 def fetch_google_news_rss(bundle: StockBundle, limit: int = 6) -> list[dict[str, Any]]:
-    """Public RSS fallback. This makes the news button visibly return content even if Gemini search is rate-limited."""
     query = quote_plus(f"{bundle.stock_name} {bundle.stock_id} 台股 OR 股票")
     url = f"https://news.google.com/rss/search?q={query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     try:
@@ -534,11 +541,10 @@ JSON schema: {{"news":[{{"title":"新聞標題","source":"媒體來源","date":"
 資料：{json.dumps(payload, ensure_ascii=False, default=str)}
 """.strip()
     try:
-        data = _gemini_request(prompt, with_search=False)
+        data = _gemini_request(prompt, with_search=True)
         news = data.get("news", []) if isinstance(data, dict) else []
         return news or rss_news[:4]
     except Exception:
-        # Gemini 失敗時仍顯示 RSS 結果，避免使用者覺得按鈕沒反應。
         return rss_news[:4]
 
 
@@ -616,6 +622,37 @@ def stars(n: Any) -> str:
     return "★" * n + "☆" * (5 - n)
 
 
+def run_api_test():
+    keys = get_google_keys()
+    if not keys:
+        st.error("找不到任何 Google API Key")
+        return
+    st.write(f"共找到 {len(keys)} 組 API Key，開始逐一測試...")
+    for idx, key in enumerate(keys, 1):
+        st.markdown(f"**Key {idx}** (`{key[:5]}...{key[-5:]}`)")
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+        
+        # 測試 1: 基本生成 (不含 Tools)
+        try:
+            r1 = requests.post(url, params={"key": key}, json={"contents": [{"parts": [{"text": "hi"}]}]}, timeout=15)
+            if r1.status_code == 200:
+                st.success(f"✅ 基本生成 (gemini-1.5-flash): 成功")
+            else:
+                st.error(f"❌ 基本生成失敗 (HTTP {r1.status_code}): {r1.text[:150]}")
+        except Exception as e:
+            st.error(f"❌ 基本連線錯誤: {e}")
+            
+        # 測試 2: Search Grounding
+        try:
+            r2 = requests.post(url, params={"key": key}, json={"contents": [{"parts": [{"text": "hi"}]}], "tools": [{"googleSearch": {}}]}, timeout=15)
+            if r2.status_code == 200:
+                st.success(f"✅ 新聞搜尋 (googleSearch): 成功")
+            else:
+                st.warning(f"⚠️ 新聞搜尋失敗 (HTTP {r2.status_code}): {r2.text[:150]}")
+        except Exception as e:
+            st.warning(f"⚠️ 新聞搜尋連線錯誤: {e}")
+
+
 def render_app() -> None:
     st.markdown(f"<div class='hero'><div class='hero-title'>📊 {APP_TITLE}</div><div class='hero-sub'>輸入股票代號或中文名稱，串接 FinMind 股價 / 法人籌碼資料。AI 詳細分析與 AI 新聞抓取採獨立按鈕觸發，預設不主動連接 API。資料僅供研究，不構成投資建議。</div></div>", unsafe_allow_html=True)
 
@@ -640,9 +677,16 @@ def render_app() -> None:
         st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("<div class='footer-tip'>新版架構改成『選模式 → 執行分析』，避免 Streamlit 按鈕 rerun 後看起來沒反應。AI 若失敗，區塊會顯示原因並保留規則版分析。</div></div>", unsafe_allow_html=True)
 
+    with st.expander("🛠️ AI 連線測試區 (除錯專用)", expanded=False):
+        st.markdown("測試內建與自訂的 API Key 狀態，確認是否被 Google 限速、權限錯誤，或模型無法使用。")
+        if st.button("執行連線測試"):
+            with st.spinner("測試 API Key 中..."):
+                run_api_test()
+
     q_changed = q != st.session_state.get("query")
     run_detail = run and ("詳細" in ai_mode)
     run_news = run and ("新聞" in ai_mode)
+    
     if run or "last_bundle" not in st.session_state or q_changed:
         st.session_state["query"] = q
         st.session_state["error"] = None
@@ -714,7 +758,6 @@ def render_app() -> None:
         summary_sub.append(st.session_state.get("news_notice", "AI 新聞抓取已完成"))
     st.markdown(f"<div class='summary-box'><div class='summary-title'>先看分析文字結論</div><div class='summary-text'>{summary_text}</div><div class='summary-sub'>{' ｜ '.join(summary_sub)}</div></div>", unsafe_allow_html=True)
 
-    # Move trade plan and path summary to the top for faster reading.
     st.markdown("<div class='section-card section-ai'>" + section_title("🧩", "操作建議與可能路徑") , unsafe_allow_html=True)
     left_plan, right_path = st.columns([1, 1])
     with left_plan:
@@ -740,12 +783,11 @@ def render_app() -> None:
         )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # AI detail/news near top
     ai_left, ai_right = st.columns(2)
     with ai_left:
         st.markdown("<div class='ai-mini-box'>" + section_title("🧠", "AI 詳細分析") , unsafe_allow_html=True)
         if st.session_state.get("ai_notice"):
-            notice_class = "status-warn" if "限制" in str(st.session_state.get("ai_notice")) or "失敗" in str(st.session_state.get("ai_notice")) else ""
+            notice_class = "status-warn" if "限制" in str(st.session_state.get("ai_notice")) or "失敗" in str(st.session_state.get("ai_notice")) or "錯誤" in str(st.session_state.get("ai_notice")) else ""
             st.markdown(f"<div class='status-box {notice_class}'>{st.session_state.get('ai_notice')}</div>", unsafe_allow_html=True)
         else:
             st.markdown("<div class='status-box'>尚未執行 AI 詳細分析。按上方按鈕後，結果會顯示在這裡。</div>", unsafe_allow_html=True)
@@ -758,7 +800,7 @@ def render_app() -> None:
     with ai_right:
         st.markdown("<div class='ai-mini-box'>" + section_title("📰", "AI 新聞抓取") , unsafe_allow_html=True)
         if st.session_state.get("news_notice"):
-            notice_class = "status-warn" if "限制" in str(st.session_state.get("news_notice")) or "失敗" in str(st.session_state.get("news_notice")) else ""
+            notice_class = "status-warn" if "限制" in str(st.session_state.get("news_notice")) or "失敗" in str(st.session_state.get("news_notice")) or "錯誤" in str(st.session_state.get("news_notice")) else ""
             st.markdown(f"<div class='status-box {notice_class}'>{st.session_state.get('news_notice')}</div>", unsafe_allow_html=True)
         else:
             st.markdown("<div class='status-box'>尚未執行 AI 新聞抓取。按上方按鈕後，新聞會顯示在這裡。</div>", unsafe_allow_html=True)
@@ -770,7 +812,6 @@ def render_app() -> None:
             st.write("尚未執行 AI 新聞抓取。若需要抓新聞，請按上方「AI 新聞抓取」按鈕。")
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # top metrics
     m1, m2, m3 = st.columns(3)
     with m1:
         metric("即時收盤價", f"{float(latest['close']):g}", f"{'▲' if up else '▼'} {pct:+.2f}%", tone="warm", value_kind="pos" if up else "neg", note_kind="pos" if up else "neg")
