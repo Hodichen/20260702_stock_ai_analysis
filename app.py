@@ -15,7 +15,7 @@ import requests
 import streamlit as st
 
 APP_TITLE = "台股 AI 個股分析"
-APP_BUILD = "2026-07-03-ui-layout-v5"
+APP_BUILD = "2026-07-03-ui-layout-v6"
 FINMIND_API_URL = "https://api.finmindtrade.com/api/v4/data"
 EMBEDDED_FINMIND_TOKENS = ['eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZnJlZW9uZXllYXJhaSIsImVtYWlsIjoiZnJlZW9uZXllYXJhaUBnbWFpbC5jb20ifQ.QrpcS4DVlqm7bdsL-bDmGdNTtg8HKzm2rrwJUtf7v24', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiaG9kaWRpZmlubWluZCIsImVtYWlsIjoiaG9kaWRpQGdtYWlsLmNvbSJ9._w1f1blFk5cVtxYkQdArSPuP2nMbcj0ecB5WUOCp1d8', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiaG9kaWRpIiwiZW1haWwiOiJnZW1pbmkyMDI1MTA4QGdtYWlsLmNvbSJ9.hvVPA_bI3YdsapZTQ5m4bJsAeR61z1NgcXBZlm2m4lw', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiMjAyNWNoZW5jaGVuMjAyNSIsImVtYWlsIjoiMjAyNWNoZW5jaGVuMjAyNUBnbWFpbC5jb20ifQ.IcNKTcRbriGQOcRAH_y13Tif2aYxKjYv5cRtZVkoOHo']
 EMBEDDED_GOOGLE_API_KEYS = ['AIzaSyD41KegJf4ZV1ZpNI2sd4Kd1nJT1HBL_LA', 'AIzaSyD0Mxqd9g8RmAMN6oOSAqi9p8UfudRO8bI', 'AIzaSyAU_Y8Og0wI6HtWLwRNRW7TTGYzyhBlRSY']
@@ -70,6 +70,16 @@ h1,h2,h3,h4{color:var(--ink); letter-spacing:.01em;}
 .footer-tip{color:var(--muted); font-size:.86rem; margin-top:.3rem;}
 .institution-foreign{color:var(--foreign)!important;} .institution-trust{color:var(--trust)!important;} .institution-dealer{color:var(--dealer)!important;} .institution-total{color:var(--total)!important;}
 hr.soft{border:none; border-top:1px solid #e4dbcf; margin:1rem 0;}
+
+.action-grid{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.75rem; margin-top:.55rem;}
+.action-item{background:#fbf8f2; border:1px solid var(--line); border-radius:16px; padding:.85rem .9rem; line-height:1.65;}
+.action-item b{color:#6b5a3f;}
+.path-item{background:#f4ede2; border:1px solid #decbb6; border-radius:16px; padding:.85rem .9rem; line-height:1.65; margin-bottom:.65rem;}
+.path-label{display:inline-block; min-width:48px; color:#7a6540; font-weight:900;}
+.status-box{background:#f9f4ea; border:1px solid #d9c7ae; border-radius:14px; padding:.65rem .75rem; margin:.55rem 0 .65rem; color:#6b5a3f; font-weight:700;}
+.status-warn{background:#fbf2f1; border-color:#e6c5c0; color:#78484a;}
+@media (max-width: 800px){.action-grid{grid-template-columns:1fr;}}
+
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -564,15 +574,15 @@ def render_app() -> None:
     b1, b2, b3 = st.columns(3)
     with b1:
         st.markdown("<div class='top-btn-row primary'>", unsafe_allow_html=True)
-        run = st.button("SYSTEM START / 分析", use_container_width=True)
+        run = st.button("SYSTEM START / 分析", use_container_width=True, key="btn_run_data")
         st.markdown("</div>", unsafe_allow_html=True)
     with b2:
         st.markdown("<div class='top-btn-row secondary'>", unsafe_allow_html=True)
-        run_ai = st.button("AI 詳細分析", use_container_width=True)
+        run_ai = st.button("AI 詳細分析", use_container_width=True, key="btn_run_ai")
         st.markdown("</div>", unsafe_allow_html=True)
     with b3:
         st.markdown("<div class='top-btn-row tertiary'>", unsafe_allow_html=True)
-        run_news = st.button("AI 新聞抓取", use_container_width=True)
+        run_news = st.button("AI 新聞抓取", use_container_width=True, key="btn_run_news")
         st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("<div class='footer-tip'>預設只跑數據分析，不會主動呼叫 Google API。若需要深入 AI 解析或新聞，再按上方獨立按鈕。</div></div>", unsafe_allow_html=True)
 
@@ -614,7 +624,7 @@ def render_app() -> None:
                 ai = call_gemini_detail(bundle, chip10, qs, ai)
                 st.session_state["last_ai"] = ai
                 st.session_state["detail_loaded"] = True
-                st.session_state["ai_notice"] = ai.get("_ai_key_status", "Gemini 詳細分析已完成")
+                st.session_state["ai_notice"] = "AI 詳細分析已完成：" + ai.get("_ai_key_status", "Gemini 已回傳結果")
             except Exception as exc:
                 st.session_state["ai_notice"] = f"{_compact_gemini_error(exc)}，目前維持規則版分析"
 
@@ -639,6 +649,7 @@ def render_app() -> None:
 
     st.markdown(f"## {bundle.stock_name}（{bundle.stock_id}）AI 分析報告")
     st.caption(f"產業：{bundle.industry or '-'} ｜ 報告生成：{datetime.now().strftime('%Y-%m-%d %H:%M')} ｜ 整體狀態：{qs['status']}")
+    levels = ai.get("levels", qs["levels"])
 
     summary_text = ai.get("verdict") or fallback_ai(bundle, chip10, qs).get("verdict", "-")
     summary_sub = []
@@ -647,10 +658,41 @@ def render_app() -> None:
         summary_sub.append(st.session_state.get("news_notice", "AI 新聞抓取已完成"))
     st.markdown(f"<div class='summary-box'><div class='summary-title'>先看分析文字結論</div><div class='summary-text'>{summary_text}</div><div class='summary-sub'>{' ｜ '.join(summary_sub)}</div></div>", unsafe_allow_html=True)
 
+    # Move trade plan and path summary to the top for faster reading.
+    st.markdown("<div class='section-card section-ai'>" + section_title("🧩", "操作建議與可能路徑") , unsafe_allow_html=True)
+    left_plan, right_path = st.columns([1, 1])
+    with left_plan:
+        st.markdown("**操作建議**")
+        suggestions = ai.get("suggestions", [])
+        if suggestions:
+            st.markdown("<div class='action-grid'>" + "".join([f"<div class='action-item'>• {s}</div>" for s in suggestions[:4]]) + "</div>", unsafe_allow_html=True)
+        else:
+            st.write("目前沒有操作建議。")
+    with right_path:
+        st.markdown("**可能路徑與評分**")
+        for p in ai.get("paths", [])[:3]:
+            st.markdown(f"<div class='path-item'><span class='path-label'>{p.get('type','')}</span>{p.get('title','')}</div>", unsafe_allow_html=True)
+        ratings = ai.get("ratings", {})
+        st.markdown(
+            f"<div class='action-grid'>"
+            f"<div class='action-item'><b>股價趨勢</b><br>{stars(ratings.get('trend', 3))}</div>"
+            f"<div class='action-item'><b>技術面</b><br>{stars(ratings.get('tech', 3))}</div>"
+            f"<div class='action-item'><b>籌碼面</b><br>{stars(ratings.get('chip', 3))}</div>"
+            f"<div class='action-item'><b>操作難度</b><br>{stars(ratings.get('diff', 3))}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
     # AI detail/news near top
     ai_left, ai_right = st.columns(2)
     with ai_left:
         st.markdown("<div class='ai-mini-box'>" + section_title("🧠", "AI 詳細分析") , unsafe_allow_html=True)
+        if st.session_state.get("ai_notice"):
+            notice_class = "status-warn" if "限制" in str(st.session_state.get("ai_notice")) or "失敗" in str(st.session_state.get("ai_notice")) else ""
+            st.markdown(f"<div class='status-box {notice_class}'>{st.session_state.get('ai_notice')}</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='status-box'>尚未執行 AI 詳細分析。按上方按鈕後，結果會顯示在這裡。</div>", unsafe_allow_html=True)
         st.write(ai.get("techConclusion", "尚未執行 AI 詳細分析，目前顯示規則版技術摘要。"))
         st.write(ai.get("chipConclusion", ""))
         st.markdown("<b>短線操作建議</b>", unsafe_allow_html=True)
@@ -659,6 +701,11 @@ def render_app() -> None:
         st.markdown("</div>", unsafe_allow_html=True)
     with ai_right:
         st.markdown("<div class='ai-mini-box'>" + section_title("📰", "AI 新聞抓取") , unsafe_allow_html=True)
+        if st.session_state.get("news_notice"):
+            notice_class = "status-warn" if "限制" in str(st.session_state.get("news_notice")) or "失敗" in str(st.session_state.get("news_notice")) else ""
+            st.markdown(f"<div class='status-box {notice_class}'>{st.session_state.get('news_notice')}</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='status-box'>尚未執行 AI 新聞抓取。按上方按鈕後，新聞會顯示在這裡。</div>", unsafe_allow_html=True)
         news = ai.get("news", []) or []
         if news:
             for item in news[:3]:
@@ -715,30 +762,12 @@ def render_app() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='section-card section-neutral'>" + section_title("🎯", "關鍵價位") , unsafe_allow_html=True)
-    levels = ai.get("levels", qs["levels"])
     l1, l2, l3, l4 = st.columns(4)
     with l1: metric("條件進場價", str(levels.get("entry", qs["levels"].get("entry"))), tone="warm")
     with l2: metric("壓力區", str(levels.get("pressure", qs["levels"].get("pressure"))), tone="warm")
     with l3: metric("支撐區", str(levels.get("support", qs["levels"].get("support"))), tone="warm")
     with l4: metric("停損參考", str(levels.get("stop", qs["levels"].get("stop"))), tone="warm")
     st.markdown("</div>", unsafe_allow_html=True)
-
-    lower_left, lower_right = st.columns(2)
-    with lower_left:
-        st.markdown("<div class='section-card section-ai'>" + section_title("🧩", "操作建議") , unsafe_allow_html=True)
-        for s in ai.get("suggestions", []):
-            st.write(f"• {s}")
-        st.markdown("</div>", unsafe_allow_html=True)
-    with lower_right:
-        st.markdown("<div class='section-card section-ai'>" + section_title("🧭", "可能路徑與評分") , unsafe_allow_html=True)
-        for p in ai.get("paths", []):
-            st.write(f"**{p.get('type','')}**：{p.get('title','')}")
-        ratings = ai.get("ratings", {})
-        st.write(f"股價趨勢：{stars(ratings.get('trend', 3))}")
-        st.write(f"技術面：{stars(ratings.get('tech', 3))}")
-        st.write(f"籌碼面：{stars(ratings.get('chip', 3))}")
-        st.write(f"操作難度：{stars(ratings.get('diff', 3))}")
-        st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='section-card section-risk'>" + section_title("⚠️", "風險評估") , unsafe_allow_html=True)
     st.markdown(f"<div class='warn-box'>{ai.get('warning','投資有風險，請審慎評估。')}</div>", unsafe_allow_html=True)
