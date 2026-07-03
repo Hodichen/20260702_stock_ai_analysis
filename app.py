@@ -6,7 +6,7 @@ import os
 import random
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, Iterable
+from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -15,50 +15,55 @@ import requests
 import streamlit as st
 
 APP_TITLE = "台股 AI 個股分析"
-APP_BUILD = "2026-07-03-revenue-volume-fix-v2"
+APP_BUILD = "2026-07-03-ui-morandi-v4"
 FINMIND_API_URL = "https://api.finmindtrade.com/api/v4/data"
 
 # Direct GitHub upload build: API pools are embedded per user request.
-# Later, rotate these keys and move them to Streamlit Secrets for safer operation.
 EMBEDDED_FINMIND_TOKENS = ['eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZnJlZW9uZXllYXJhaSIsImVtYWlsIjoiZnJlZW9uZXllYXJhaUBnbWFpbC5jb20ifQ.QrpcS4DVlqm7bdsL-bDmGdNTtg8HKzm2rrwJUtf7v24', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiaG9kaWRpZmlubWluZCIsImVtYWlsIjoiaG9kaWRpQGdtYWlsLmNvbSJ9._w1f1blFk5cVtxYkQdArSPuP2nMbcj0ecB5WUOCp1d8', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiaG9kaWRpIiwiZW1haWwiOiJnZW1pbmkyMDI1MTA4QGdtYWlsLmNvbSJ9.hvVPA_bI3YdsapZTQ5m4bJsAeR61z1NgcXBZlm2m4lw', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiMjAyNWNoZW5jaGVuMjAyNSIsImVtYWlsIjoiMjAyNWNoZW5jaGVuMjAyNUBnbWFpbC5jb20ifQ.IcNKTcRbriGQOcRAH_y13Tif2aYxKjYv5cRtZVkoOHo']
 EMBEDDED_GOOGLE_API_KEYS = ['AIzaSyD41KegJf4ZV1ZpNI2sd4Kd1nJT1HBL_LA', 'AIzaSyD0Mxqd9g8RmAMN6oOSAqi9p8UfudRO8bI', 'AIzaSyAU_Y8Og0wI6HtWLwRNRW7TTGYzyhBlRSY']
 
-st.set_page_config(
-    page_title=APP_TITLE,
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+st.set_page_config(page_title=APP_TITLE, page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
 CSS = """
 <style>
 :root{
-  --bg:#f5f1e9; --panel:#fffdf8; --panel2:#f8f3ea; --ink:#3b3833; --muted:#8a8176;
-  --gold:#c8ab6a; --gold2:#a88745; --line:#e2d7c5; --red:#8f4248; --green:#3f6d57;
-  --blue:#5f7f99; --purple:#9a7e95;
+  --bg:#efebe3; --ink:#433c36; --muted:#867c73; --line:#ddd2c2;
+  --card:#fbf8f2; --hero:#f6f0e4; --gold:#b89d6a;
+  --earth1:#f3ece1; --earth2:#e7ddd2; --earth3:#e2e5dc; --earth4:#e3d6cf; --earth5:#ece5d8;
+  --pos:#c94d42; --neg:#4f8a61; --btn:#c55c52; --btn2:#8f9d8f;
 }
 html, body, .stApp{background:var(--bg); color:var(--ink);}
-.block-container{max-width:1280px; padding-top:1.2rem; padding-bottom:4rem;}
+.block-container{max-width:1280px; padding-top:1.0rem; padding-bottom:4rem;}
 section[data-testid="stSidebar"]{display:none!important;} div[data-testid="collapsedControl"]{display:none!important;}
 h1,h2,h3,h4{color:var(--ink); letter-spacing:.01em;}
-.hero{background:linear-gradient(135deg,#fffdf8 0%,#f5efe2 100%); border:1px solid var(--line); border-top:5px solid var(--gold); border-radius:22px; padding:1.25rem 1.45rem; box-shadow:0 10px 32px rgba(80,60,30,.08); margin-bottom:1rem;}
-.hero-title{font-size:2.25rem; font-weight:900; color:var(--ink); display:flex; align-items:center; gap:.6rem;}
-.hero-sub{color:var(--muted); margin-top:.35rem; font-size:.95rem;}
-.search-card{background:var(--panel); border:1px solid var(--line); border-radius:20px; padding:1rem 1.1rem; box-shadow:0 8px 22px rgba(80,60,30,.06); margin-bottom:1rem;}
-.metric-card{background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:1rem 1.05rem; min-height:120px; box-shadow:0 8px 22px rgba(80,60,30,.05);}
-.metric-label{color:var(--muted); font-size:.9rem; margin-bottom:.4rem;}
-.metric-value{font-size:2rem; font-weight:900; color:var(--ink); line-height:1.2;}
-.metric-note{color:var(--muted); font-size:.86rem; margin-top:.3rem;}
-.badge{display:inline-flex; align-items:center; gap:.35rem; border:1px solid var(--line); border-radius:999px; padding:.35rem .75rem; background:#fff; font-weight:700; margin:.15rem .25rem .15rem 0;}
-.badge-red{color:var(--red); border-color:#e5c5c7; background:#fff7f7}.badge-green{color:var(--green); border-color:#bdd7c8; background:#f4fbf7}.badge-gold{color:var(--gold2); border-color:#e3d1a6; background:#fffaf0}.badge-blue{color:var(--blue); border-color:#c8d5df; background:#f3f8fb}
-.section{background:var(--panel); border:1px solid var(--line); border-radius:22px; padding:1.1rem 1.2rem; box-shadow:0 8px 26px rgba(80,60,30,.06); margin-bottom:1rem;}
-.section-title{font-size:1.25rem; font-weight:900; color:var(--gold2); border-left:6px solid var(--gold); padding-left:.7rem; margin:.2rem 0 1rem;}
-.ai-box{background:#fffaf0; border:1px solid #e2cd98; border-radius:22px; padding:1.15rem 1.2rem; line-height:1.8;}
-.warn-box{background:#fff6f6; border:1px solid #e7c4c4; color:#6f3034; border-radius:16px; padding:.85rem 1rem; line-height:1.7;}
+.hero{background:linear-gradient(135deg,#f7f1e7 0%,#ede6da 100%); border:1px solid var(--line); border-top:6px solid var(--gold); border-radius:26px; padding:1.4rem 1.5rem; box-shadow:0 10px 26px rgba(60,48,36,.05); margin-bottom:1rem;}
+.hero-title{font-size:2.25rem; font-weight:900; display:flex; align-items:center; gap:.65rem;}
+.hero-sub{color:var(--muted); margin-top:.4rem; font-size:.96rem;}
+.search-card{background:var(--card); border:1px solid var(--line); border-radius:22px; padding:1rem 1.15rem; box-shadow:0 8px 18px rgba(60,48,36,.05); margin-bottom:1rem;}
+.summary-box{background:linear-gradient(135deg,#f5eee3 0%,#efe5d8 100%); border:1px solid #d7c6b1; border-radius:22px; padding:1rem 1.15rem; margin:.75rem 0 1rem; box-shadow:0 6px 15px rgba(60,48,36,.04);}
+.summary-title{font-size:1.05rem; color:#7a6540; font-weight:900; margin-bottom:.4rem;}
+.summary-text{font-size:1.08rem; line-height:1.9; font-weight:700;}
+.summary-sub{font-size:.88rem; color:var(--muted); margin-top:.4rem;}
+.metric-card{background:var(--card); border:1px solid var(--line); border-radius:20px; padding:1rem 1.1rem; min-height:128px; box-shadow:0 8px 18px rgba(60,48,36,.05);}
+.metric-warm{background:var(--earth1);} .metric-cool{background:var(--earth3);} .metric-soft{background:var(--earth4);} .metric-sand{background:var(--earth5);} .metric-stone{background:var(--earth2);}
+.metric-label{color:var(--muted); font-size:.92rem; margin-bottom:.45rem;}
+.metric-value{font-size:2rem; font-weight:900; line-height:1.15; color:var(--ink);}
+.metric-note{font-size:.9rem; margin-top:.34rem; color:var(--muted);} 
+.val-pos{color:var(--pos)!important;} .val-neg{color:var(--neg)!important;} .note-pos{color:var(--pos)!important;} .note-neg{color:var(--neg)!important;}
+.badge{display:inline-flex; align-items:center; gap:.35rem; border-radius:999px; padding:.42rem .8rem; font-weight:800; margin:.2rem .25rem .2rem 0; border:1px solid var(--line); background:#fffaf5;}
+.badge-pos{color:var(--pos); border-color:#e8bdb6; background:#fff7f5;} .badge-neg{color:var(--neg); border-color:#bcd0c1; background:#f6fbf7;} .badge-mid{color:#7b6a49; border-color:#ddd0b8; background:#fffaf0;} .badge-info{color:#6c7f8a; border-color:#cfdadf; background:#f6fafb;}
+.section{border-radius:22px; padding:1.05rem 1.15rem; border:1px solid var(--line); box-shadow:0 8px 18px rgba(60,48,36,.05); margin-bottom:1rem;}
+.section-neutral{background:var(--card);} .section-tech{background:#f4ede2;} .section-chip{background:#edf1ea;} .section-fund{background:#f1ece8;} .section-ai{background:#f7f0e4;} .section-risk{background:#f8efef;}
+.section-title{font-size:1.25rem; font-weight:900; color:#6b5a3f; border-left:6px solid var(--gold); padding-left:.72rem; margin:.15rem 0 1rem;}
+.warn-box{background:#fbf2f1; border:1px solid #e6c5c0; color:#6b3b3f; border-radius:18px; padding:1rem 1.05rem; line-height:1.8;}
 .small-muted{color:var(--muted); font-size:.88rem;}
-.stTabs [data-baseweb="tab-list"]{gap:.4rem;}
-.stTabs [data-baseweb="tab"]{background:#fffdf8; border:1px solid var(--line); border-radius:999px; padding:.55rem 1rem; color:var(--ink);}
-.stTabs [aria-selected="true"]{background:#f7ead0!important; border-color:#c8ab6a!important; color:#6d5120!important;}
+.top-btn-row .stButton>button{height:52px; border-radius:16px; font-weight:900; border:none;}
+.top-btn-row .stButton:nth-child(1) button{background:var(--btn); color:#fff;}
+.top-btn-row .stButton:nth-child(2) button{background:#b08f6a; color:#fff;}
+.top-btn-row .stButton:nth-child(3) button{background:var(--btn2); color:#fff;}
+[data-testid="stTextInput"] input, [data-testid="stSelectbox"] div[data-baseweb="select"]{border-radius:14px!important;}
+.plot-wrap{background:var(--card); border:1px solid var(--line); border-radius:22px; padding:.65rem; margin-bottom:1rem;}
+.footer-tip{color:var(--muted); font-size:.86rem; margin-top:.3rem;}
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -75,7 +80,6 @@ class StockBundle:
 
 
 def _secret_list(name: str) -> list[str]:
-    """Read list-like secrets safely. Supports TOML list or comma/newline separated string."""
     raw = None
     try:
         raw = st.secrets.get(name)
@@ -90,7 +94,6 @@ def _secret_list(name: str) -> list[str]:
     text = str(raw).strip()
     if not text:
         return []
-    # A JSON/TOML-ish list pasted as string.
     if text.startswith("["):
         try:
             arr = json.loads(text)
@@ -172,8 +175,7 @@ def ema(values: pd.Series, span: int) -> pd.Series:
 
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    rename = {"max": "high", "min": "low", "Trading_Volume": "volume"}
-    out = out.rename(columns=rename)
+    out = out.rename(columns={"max": "high", "min": "low", "Trading_Volume": "volume"})
     for col in ["open", "high", "low", "close", "volume", "Trading_money", "spread"]:
         if col in out.columns:
             out[col] = to_num(out[col])
@@ -267,43 +269,14 @@ def aggregate_chips(chips: pd.DataFrame, price: pd.DataFrame) -> pd.DataFrame:
 
 
 def latest_revenue(revenue: pd.DataFrame) -> dict[str, Any]:
-    """Return latest monthly revenue and calculated YoY/MoM.
-
-    FinMind TaiwanStockMonthRevenue fields are usually:
-    - revenue: monthly revenue amount in NTD
-    - revenue_year: the revenue year, for example 2026
-    - revenue_month: the revenue month, for example 5
-
-    revenue_year / revenue_month are identifiers, NOT percentages. This function
-    creates a YYYY-MM period from revenue_year + revenue_month first, then compares:
-    - YoY: latest month vs same month last year
-    - MoM: latest month vs previous month
-    """
     blank = {"revenue": "-", "yoy": "-", "mom": "-", "period": "-"}
     if revenue.empty:
         return blank
-
     df = revenue.copy()
-
-    # Find revenue column. Keep several fallbacks for manually uploaded CSV variants.
-    rev_col = None
-    for c in ["revenue", "營業收入-當月營收", "當月營收", "monthly_revenue"]:
-        if c in df.columns:
-            rev_col = c
-            break
+    rev_col = next((c for c in ["revenue", "營業收入-當月營收", "當月營收", "monthly_revenue"] if c in df.columns), None)
     if rev_col is None:
         return blank
-
-    df["_revenue"] = (
-        df[rev_col]
-        .astype(str)
-        .str.replace(",", "", regex=False)
-        .str.replace("--", "", regex=False)
-    )
-    df["_revenue"] = pd.to_numeric(df["_revenue"], errors="coerce")
-
-    # Prefer revenue_year/revenue_month, because FinMind date can be the publish
-    # month while revenue_month is the actual operating month.
+    df["_revenue"] = pd.to_numeric(df[rev_col].astype(str).str.replace(",", "", regex=False).str.replace("--", "", regex=False), errors="coerce")
     if {"revenue_year", "revenue_month"}.issubset(df.columns):
         df["_year"] = pd.to_numeric(df["revenue_year"], errors="coerce")
         df["_month"] = pd.to_numeric(df["revenue_month"], errors="coerce")
@@ -311,21 +284,16 @@ def latest_revenue(revenue: pd.DataFrame) -> dict[str, Any]:
         dt = pd.to_datetime(df.get("date"), errors="coerce") if "date" in df.columns else pd.Series(pd.NaT, index=df.index)
         df["_year"] = dt.dt.year
         df["_month"] = dt.dt.month
-
     df = df.dropna(subset=["_revenue", "_year", "_month"]).copy()
     if df.empty:
         return blank
-
     df["_year"] = df["_year"].astype(int)
     df["_month"] = df["_month"].astype(int)
     df = df[(df["_month"] >= 1) & (df["_month"] <= 12)]
     if df.empty:
         return blank
-
-    # Deduplicate by month, keep latest row if there are revisions.
     df["_period_no"] = df["_year"] * 12 + df["_month"]
     df = df.sort_values(["_period_no"]).drop_duplicates("_period_no", keep="last").reset_index(drop=True)
-
     row = df.iloc[-1]
     cur_rev = float(row["_revenue"])
     year = int(row["_year"])
@@ -341,45 +309,31 @@ def latest_revenue(revenue: pd.DataFrame) -> dict[str, Any]:
         except Exception:
             return "-"
 
-    # MoM: exact previous calendar month.
-    prev_period = int(row["_period_no"]) - 1
-    prev_rows = df[df["_period_no"] == prev_period]
-    mom_base = prev_rows["_revenue"].iloc[-1] if not prev_rows.empty else None
-
-    # YoY: same month previous year.
-    yoy_period = int(row["_period_no"]) - 12
-    yoy_rows = df[df["_period_no"] == yoy_period]
-    yoy_base = yoy_rows["_revenue"].iloc[-1] if not yoy_rows.empty else None
-
+    prev_rows = df[df["_period_no"] == int(row["_period_no"]) - 1]
+    yoy_rows = df[df["_period_no"] == int(row["_period_no"]) - 12]
     return {
         "revenue": rev_str,
-        "yoy": pct(cur_rev, yoy_base),
-        "mom": pct(cur_rev, mom_base),
+        "yoy": pct(cur_rev, yoy_rows["_revenue"].iloc[-1] if not yoy_rows.empty else None),
+        "mom": pct(cur_rev, prev_rows["_revenue"].iloc[-1] if not prev_rows.empty else None),
         "period": f"{year}-{month:02d}",
     }
+
 
 def round_tick(x: float) -> float:
     if not math.isfinite(x):
         return x
-    if x >= 1000:
-        step = 5
-    elif x >= 500:
-        step = 1
-    elif x >= 100:
-        step = 0.5
-    elif x >= 50:
-        step = 0.1
-    elif x >= 10:
-        step = 0.05
-    else:
-        step = 0.01
+    if x >= 1000: step = 5
+    elif x >= 500: step = 1
+    elif x >= 100: step = 0.5
+    elif x >= 50: step = 0.1
+    elif x >= 10: step = 0.05
+    else: step = 0.01
     return round(round(x / step) * step, 2)
 
 
 def score_and_summary(bundle: StockBundle, chip10: pd.DataFrame) -> dict[str, Any]:
     p = bundle.prices
     latest = p.iloc[-1]
-    prev = p.iloc[-2] if len(p) >= 2 else latest
     close = float(latest["close"])
     score = 50
     reasons: list[str] = []
@@ -456,14 +410,6 @@ def fallback_ai(bundle: StockBundle, chip10: pd.DataFrame, qs: dict[str, Any]) -
 
 
 def get_google_keys() -> list[str]:
-    """Read Gemini API keys as a pool.
-
-    Supported Streamlit Secrets / env formats:
-    - GOOGLE_API_KEYS = ["key1", "key2", "key3"]
-    - GOOGLE_API_KEYS = "key1,key2,key3"
-    - GOOGLE_API_KEY = "single_key"
-    The app will rotate keys and try the next key automatically if one fails.
-    """
     keys = list(EMBEDDED_GOOGLE_API_KEYS) + _secret_list("GOOGLE_API_KEYS")
     single = None
     try:
@@ -473,9 +419,8 @@ def get_google_keys() -> list[str]:
     single = single or os.getenv("GOOGLE_API_KEY")
     if single:
         keys.append(str(single).strip())
-    # Preserve order while removing blanks/duplicates.
-    seen: set[str] = set()
-    cleaned: list[str] = []
+    seen = set()
+    cleaned = []
     for key in keys:
         key = str(key).strip()
         if key and key not in seen:
@@ -485,94 +430,100 @@ def get_google_keys() -> list[str]:
     return cleaned
 
 
-def call_gemini(bundle: StockBundle, chip10: pd.DataFrame, qs: dict[str, Any]) -> dict[str, Any]:
+def _compact_gemini_error(exc: Exception | None) -> str:
+    msg = str(exc or "")
+    if "429" in msg or "Too Many Requests" in msg:
+        return "Google Gemini API 額度或速率限制"
+    if "403" in msg:
+        return "Google Gemini API 權限或 key 限制"
+    if "404" in msg:
+        return "Google Gemini 模型名稱可能不可用"
+    if not msg:
+        return "Google Gemini 暫時無法回應"
+    return "Google Gemini 呼叫失敗"
+
+
+def _gemini_request(prompt: str, with_search: bool = False) -> dict[str, Any]:
     keys = get_google_keys()
     if not keys:
-        return fallback_ai(bundle, chip10, qs)
-    latest = bundle.prices.iloc[-1]
-    recent_chips = chip10.tail(10).to_dict("records") if not chip10.empty else []
+        raise RuntimeError("沒有可用的 Google API key")
     model = None
     try:
         model = st.secrets.get("GOOGLE_MODEL")
     except Exception:
         model = None
     model = model or os.getenv("GOOGLE_MODEL") or "gemini-2.5-flash"
-    payload = {
-        "stock": {"id": bundle.stock_id, "name": bundle.stock_name, "industry": bundle.industry},
-        "latest": {"close": latest.get("close"), "spread": latest.get("spread"), "volume": latest.get("volume"), "ma5": latest.get("ma5"), "ma20": latest.get("ma20"), "ma60": latest.get("ma60"), "rsi": latest.get("rsi"), "k": latest.get("k"), "d": latest.get("d"), "macd_dif": latest.get("macd_dif"), "macd_dea": latest.get("macd_dea")},
-        "chip10": recent_chips,
-        "quant": qs,
-    }
-    prompt = f"""
-你是一位實戰經驗豐富的台股分析助理。根據下列真實資料，產出台股個股分析 JSON。
-要求：
-1. 使用繁體中文。
-2. 不要保證漲跌，不要使用必漲、穩賺等字眼。
-3. 必須包含具體進場條件、支撐、壓力、停損、風險。
-4. 若可用搜尋能力，整理最近 4 則重要新聞；若沒有搜尋到，news 回傳空陣列。
-5. 僅輸出 JSON，不要 Markdown。
-JSON schema:
-{{
-  "tag": {{"action":"買/賣/觀望", "reason":"一句短評"}},
-  "techConclusion":"一句話總結技術面",
-  "chipConclusion":"一句話總結籌碼面",
-  "suggestions":["具體建議1","具體建議2","具體建議3","具體建議4"],
-  "levels": {{"pressure":"壓力價位區間", "support":"支撐價位區間", "strong":"強支撐價位", "stop":"停損參考價", "entry":"條件進場價", "target":"第一目標價"}},
-  "paths":[{{"type":"上漲", "title":"..."}}, {{"type":"回檔", "title":"..."}}, {{"type":"轉弱", "title":"..."}}],
-  "midTerm":["中長線觀點1","中長線觀點2"],
-  "warning":"風險提醒內容",
-  "ratings": {{"trend":1, "tech":1, "chip":1, "diff":1}},
-  "verdict":"綜合評估結論",
-  "news":[{{"title":"新聞標題", "source":"媒體來源", "date":"發布時間"}}]
-}}
-資料：{json.dumps(payload, ensure_ascii=False, default=str)}
-""".strip()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.35},
     }
-    # Some Gemini models support grounding with google_search. If rejected, fallback to no tool.
-    last_exc: Exception | None = None
+    if with_search:
+        body["tools"] = [{"google_search": {}}]
+    last_exc = None
     for key in keys:
-        for with_tool in [True, False]:
-            try:
-                if with_tool:
-                    body["tools"] = [{"google_search": {}}]
-                else:
-                    body.pop("tools", None)
-                r = requests.post(url, params={"key": key}, json=body, timeout=60)
-                r.raise_for_status()
-                result = r.json()
-                text = result["candidates"][0]["content"]["parts"][0]["text"]
-                text = text.replace("```json", "").replace("```", "").strip()
-                data = json.loads(text)
-                base = fallback_ai(bundle, chip10, qs)
-                base.update(data)
-                if "levels" in data and isinstance(data["levels"], dict):
-                    lvl = base.get("levels", {})
-                    lvl.update(data["levels"])
-                    base["levels"] = lvl
-                base["_ai_key_status"] = f"Gemini 已啟用；本次使用 API key 池第 {keys.index(key) + 1} 組。"
-                return base
-            except Exception as exc:
-                last_exc = exc
-                continue
-    res = fallback_ai(bundle, chip10, qs)
-    def _compact_gemini_error(exc: Exception | None) -> str:
-        msg = str(exc or "")
-        if "429" in msg or "Too Many Requests" in msg:
-            return "Google Gemini API 額度或速率限制，已改用規則版分析"
-        if "403" in msg:
-            return "Google Gemini API 權限或 key 限制，已改用規則版分析"
-        if "404" in msg:
-            return "Google Gemini 模型名稱可能不可用，已改用規則版分析"
-        if not msg:
-            return "Google Gemini 暫時無法回應，已改用規則版分析"
-        return "Google Gemini 呼叫失敗，已改用規則版分析"
+        try:
+            r = requests.post(url, params={"key": key}, json=body, timeout=60)
+            r.raise_for_status()
+            result = r.json()
+            text = result["candidates"][0]["content"]["parts"][0]["text"]
+            text = text.replace("```json", "").replace("```", "").strip()
+            data = json.loads(text)
+            data["_ai_key_status"] = f"Gemini 已啟用；本次使用 API key 池第 {keys.index(key)+1} 組。"
+            return data
+        except Exception as exc:
+            last_exc = exc
+            continue
+    raise RuntimeError(_compact_gemini_error(last_exc))
 
-    res["verdict"] = res["verdict"] + f"（{_compact_gemini_error(last_exc)}）"
-    return res
+
+def call_gemini_detail(bundle: StockBundle, chip10: pd.DataFrame, qs: dict[str, Any], base_ai: dict[str, Any]) -> dict[str, Any]:
+    latest = bundle.prices.iloc[-1]
+    payload = {
+        "stock": {"id": bundle.stock_id, "name": bundle.stock_name, "industry": bundle.industry},
+        "latest": {"close": latest.get("close"), "spread": latest.get("spread"), "volume": latest.get("volume"), "ma5": latest.get("ma5"), "ma20": latest.get("ma20"), "ma60": latest.get("ma60"), "rsi": latest.get("rsi"), "k": latest.get("k"), "d": latest.get("d"), "macd_dif": latest.get("macd_dif"), "macd_dea": latest.get("macd_dea")},
+        "chip10": chip10.tail(10).to_dict("records") if not chip10.empty else [],
+        "quant": qs,
+    }
+    prompt = f"""
+你是一位台股分析助理。請根據下列資料，用繁體中文輸出 JSON，不要輸出 markdown。
+重點：生成技術面結論、籌碼面結論、短線建議、三條可能路徑、風險提醒、整體結論。
+不要搜尋新聞。
+JSON schema:
+{{
+  "tag": {{"action":"買/賣/觀望", "reason":"一句短評"}},
+  "techConclusion":"一句話總結技術面",
+  "chipConclusion":"一句話總結籌碼面",
+  "suggestions":["建議1","建議2","建議3","建議4"],
+  "levels": {{"pressure":"壓力價位區間", "support":"支撐價位區間", "strong":"強支撐價位", "stop":"停損參考價", "entry":"條件進場價", "target":"第一目標價"}},
+  "paths":[{{"type":"上漲", "title":"..."}}, {{"type":"回檔", "title":"..."}}, {{"type":"轉弱", "title":"..."}}],
+  "midTerm":["中長線觀點1","中長線觀點2"],
+  "warning":"風險提醒內容",
+  "ratings": {{"trend":1, "tech":1, "chip":1, "diff":1}},
+  "verdict":"先給出一段清楚的分析文字結論"
+}}
+資料：{json.dumps(payload, ensure_ascii=False, default=str)}
+""".strip()
+    data = _gemini_request(prompt, with_search=False)
+    merged = dict(base_ai)
+    merged.update(data)
+    if "levels" in data and isinstance(data["levels"], dict):
+        lvl = dict(base_ai.get("levels", {}))
+        lvl.update(data["levels"])
+        merged["levels"] = lvl
+    return merged
+
+
+def call_gemini_news(bundle: StockBundle, qs: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = {"stock": {"id": bundle.stock_id, "name": bundle.stock_name, "industry": bundle.industry}, "quant": qs}
+    prompt = f"""
+請使用繁體中文，搜尋並整理這檔台股最近 4 則重要新聞，只輸出 JSON，不要輸出 markdown。
+JSON schema:
+{{"news":[{{"title":"新聞標題","source":"媒體來源","date":"發布時間","summary":"一句話摘要"}}]}}
+資料：{json.dumps(payload, ensure_ascii=False)}
+""".strip()
+    data = _gemini_request(prompt, with_search=True)
+    return data.get("news", []) if isinstance(data, dict) else []
 
 
 def fmt_num(x: Any, digits: int = 2) -> str:
@@ -583,39 +534,39 @@ def fmt_num(x: Any, digits: int = 2) -> str:
         return "-"
 
 
-def metric(label: str, value: str, note: str = "") -> None:
-    st.markdown(f"<div class='metric-card'><div class='metric-label'>{label}</div><div class='metric-value'>{value}</div><div class='metric-note'>{note}</div></div>", unsafe_allow_html=True)
+def metric(label: str, value: str, note: str = "", tone: str = "warm", value_kind: str = "", note_kind: str = "") -> None:
+    tone_class = {"warm":"metric-warm", "cool":"metric-cool", "soft":"metric-soft", "sand":"metric-sand", "stone":"metric-stone"}.get(tone, "metric-warm")
+    value_class = f" val-{value_kind}" if value_kind in ["pos", "neg"] else ""
+    note_class = f" note-{note_kind}" if note_kind in ["pos", "neg"] else ""
+    st.markdown(f"<div class='metric-card {tone_class}'><div class='metric-label'>{label}</div><div class='metric-value{value_class}'>{value}</div><div class='metric-note{note_class}'>{note}</div></div>", unsafe_allow_html=True)
 
 
-def badge(text: str, kind: str = "gold") -> str:
-    return f"<span class='badge badge-{kind}'>{text}</span>"
+def badge(text: str, kind: str = "mid") -> str:
+    cls = {"pos":"badge-pos", "neg":"badge-neg", "mid":"badge-mid", "info":"badge-info"}.get(kind, "badge-mid")
+    return f"<span class='badge {cls}'>{text}</span>"
 
 
 def plot_technical(prices: pd.DataFrame) -> go.Figure:
     df = prices.copy()
-    fig = make_subplots(
-        rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.035,
-        row_heights=[0.48, 0.16, 0.18, 0.18],
-        subplot_titles=("日 K 線（含布林通道 / 均線）", "成交量", "RSI / KD", "MACD"),
-    )
-    inc, dec = "#c76a6a", "#7b9e89"
+    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.035, row_heights=[0.48,0.16,0.18,0.18], subplot_titles=("日 K 線（含布林通道 / 均線）","成交量","RSI / KD","MACD"))
+    inc, dec = "#c94d42", "#4f8a61"
     fig.add_trace(go.Candlestick(x=df["date"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], increasing_line_color=inc, decreasing_line_color=dec, name="K線"), row=1, col=1)
-    for col, name, color in [("ma5", "MA5", "#cba365"), ("ma20", "MA20", "#6d98ab"), ("ma60", "MA60", "#b0889f"), ("bb_upper", "BB上緣", "#bdb6aa"), ("bb_lower", "BB下緣", "#bdb6aa")]:
+    for col, name, color in [("ma5", "MA5", "#b89d6a"), ("ma20", "MA20", "#7c968b"), ("ma60", "MA60", "#ad8d80"), ("bb_upper", "BB上緣", "#bcb1a0"), ("bb_lower", "BB下緣", "#bcb1a0")]:
         if col in df:
             fig.add_trace(go.Scatter(x=df["date"], y=df[col], mode="lines", name=name, line=dict(color=color, width=1.4, dash="dot" if "BB" in name else None)), row=1, col=1)
     colors = [inc if bool(v) else dec for v in df["is_up"]]
     fig.add_trace(go.Bar(x=df["date"], y=df["volume"] / 1000, name="成交量(千張)", marker_color=colors), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df["date"], y=df["rsi"], mode="lines", name="RSI", line=dict(color="#cba365", width=1.6)), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df["date"], y=df["k"], mode="lines", name="K", line=dict(color="#6d98ab", width=1.3)), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df["date"], y=df["d"], mode="lines", name="D", line=dict(color="#b0889f", width=1.3)), row=3, col=1)
-    fig.add_hline(y=80, line_dash="dash", line_color="#d8bcbc", row=3, col=1)
-    fig.add_hline(y=20, line_dash="dash", line_color="#bed2c5", row=3, col=1)
+    fig.add_trace(go.Scatter(x=df["date"], y=df["rsi"], mode="lines", name="RSI", line=dict(color="#b89d6a", width=1.6)), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df["date"], y=df["k"], mode="lines", name="K", line=dict(color="#7c968b", width=1.3)), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df["date"], y=df["d"], mode="lines", name="D", line=dict(color="#ad8d80", width=1.3)), row=3, col=1)
+    fig.add_hline(y=80, line_dash="dash", line_color="#e0c8c5", row=3, col=1)
+    fig.add_hline(y=20, line_dash="dash", line_color="#c9ddcf", row=3, col=1)
     hist_colors = [inc if float(v or 0) >= 0 else dec for v in df["macd_hist"]]
     fig.add_trace(go.Bar(x=df["date"], y=df["macd_hist"], name="MACD柱", marker_color=hist_colors), row=4, col=1)
-    fig.add_trace(go.Scatter(x=df["date"], y=df["macd_dif"], mode="lines", name="DIF", line=dict(color="#6d98ab", width=1.5)), row=4, col=1)
-    fig.add_trace(go.Scatter(x=df["date"], y=df["macd_dea"], mode="lines", name="DEA", line=dict(color="#cba365", width=1.5)), row=4, col=1)
-    fig.update_layout(height=760, template="plotly_white", margin=dict(l=20, r=20, t=45, b=20), xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center"), paper_bgcolor="#fffdf8", plot_bgcolor="#fffdf8")
-    fig.update_yaxes(showgrid=True, gridcolor="#efe8dd")
+    fig.add_trace(go.Scatter(x=df["date"], y=df["macd_dif"], mode="lines", name="DIF", line=dict(color="#7c968b", width=1.5)), row=4, col=1)
+    fig.add_trace(go.Scatter(x=df["date"], y=df["macd_dea"], mode="lines", name="DEA", line=dict(color="#b89d6a", width=1.5)), row=4, col=1)
+    fig.update_layout(height=760, template="plotly_white", margin=dict(l=20,r=20,t=45,b=20), xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center"), paper_bgcolor="#fbf8f2", plot_bgcolor="#fbf8f2")
+    fig.update_yaxes(showgrid=True, gridcolor="#efe6d8")
     fig.update_xaxes(showgrid=False)
     return fig
 
@@ -624,12 +575,12 @@ def plot_chips(chip10: pd.DataFrame) -> go.Figure:
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     if chip10.empty:
         return fig
-    fig.add_trace(go.Bar(x=chip10["date"], y=chip10["foreign"], name="外資", marker_color="#6d98ab"), secondary_y=False)
-    fig.add_trace(go.Bar(x=chip10["date"], y=chip10["trust"], name="投信", marker_color="#c76a6a"), secondary_y=False)
-    fig.add_trace(go.Bar(x=chip10["date"], y=chip10["dealer"], name="自營商", marker_color="#b0889f"), secondary_y=False)
+    fig.add_trace(go.Bar(x=chip10["date"], y=chip10["foreign"], name="外資", marker_color="#c94d42"), secondary_y=False)
+    fig.add_trace(go.Bar(x=chip10["date"], y=chip10["trust"], name="投信", marker_color="#7c968b"), secondary_y=False)
+    fig.add_trace(go.Bar(x=chip10["date"], y=chip10["dealer"], name="自營商", marker_color="#ad8d80"), secondary_y=False)
     if "price" in chip10.columns:
-        fig.add_trace(go.Scatter(x=chip10["date"], y=chip10["price"], name="股價", mode="lines+markers", line=dict(color="#cba365", width=2)), secondary_y=True)
-    fig.update_layout(height=360, barmode="relative", template="plotly_white", margin=dict(l=20, r=20, t=20, b=20), paper_bgcolor="#fffdf8", plot_bgcolor="#fffdf8", legend=dict(orientation="h"))
+        fig.add_trace(go.Scatter(x=chip10["date"], y=chip10["price"], name="股價", mode="lines+markers", line=dict(color="#b89d6a", width=2)), secondary_y=True)
+    fig.update_layout(height=360, barmode="relative", template="plotly_white", margin=dict(l=20,r=20,t=20,b=20), paper_bgcolor="#fbf8f2", plot_bgcolor="#fbf8f2", legend=dict(orientation="h"))
     fig.update_yaxes(title_text="買賣超（千張）", secondary_y=False)
     fig.update_yaxes(title_text="股價", secondary_y=True)
     return fig
@@ -645,53 +596,84 @@ def stars(n: Any) -> str:
 
 
 def render_app() -> None:
-    st.markdown(f"""
-    <div class='hero'>
-      <div class='hero-title'>📊 {APP_TITLE}</div>
-      <div class='hero-sub'>輸入股票代號或中文名稱，串接 FinMind 股價 / 法人籌碼資料，並使用 Google Gemini 產出個股分析。資料僅供研究，不構成投資建議。</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"<div class='hero'><div class='hero-title'>📊 {APP_TITLE}</div><div class='hero-sub'>輸入股票代號或中文名稱，串接 FinMind 股價 / 法人籌碼資料。AI 詳細分析與 AI 新聞抓取採獨立按鈕觸發，預設不連接 API。資料僅供研究，不構成投資建議。</div></div>", unsafe_allow_html=True)
 
-    with st.container():
-        st.markdown("<div class='search-card'>", unsafe_allow_html=True)
-        c1, c2, c3 = st.columns([2.4, 1, 1])
-        with c1:
-            q = st.text_input("股票代號或中文名稱", value=st.session_state.get("query", "2330"), placeholder="例如：2330、台積電、友達")
-        with c2:
-            theme = st.selectbox("介面風格", ["莫蘭迪", "專業黑（預留）"], index=0)
-        with c3:
-            st.write("")
-            run = st.button("SYSTEM START / 分析", use_container_width=True, type="primary")
+    st.markdown("<div class='search-card'>", unsafe_allow_html=True)
+    qcol, btn1, btn2, btn3 = st.columns([2.5, 1, 1, 1])
+    with qcol:
+        q = st.text_input("股票代號或中文名稱", value=st.session_state.get("query", "2330"), placeholder="例如：2330、台積電、友達")
+    with btn1:
+        st.write("")
+        st.markdown("<div class='top-btn-row'>", unsafe_allow_html=True)
+        run = st.button("SYSTEM START / 分析", use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
+    with btn2:
+        st.write("")
+        st.markdown("<div class='top-btn-row'>", unsafe_allow_html=True)
+        run_ai = st.button("AI 詳細分析", use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with btn3:
+        st.write("")
+        st.markdown("<div class='top-btn-row'>", unsafe_allow_html=True)
+        run_news = st.button("AI 新聞抓取", use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("<div class='footer-tip'>預設只跑數據分析，不會主動呼叫 Google API。需要更深入 AI 解讀或新聞時，再按上方獨立按鈕。</div></div>", unsafe_allow_html=True)
 
-    if run or "last_bundle" not in st.session_state or q != st.session_state.get("query"):
+    q_changed = q != st.session_state.get("query")
+    if run or "last_bundle" not in st.session_state or q_changed:
         st.session_state["query"] = q
+        st.session_state["error"] = None
+        st.session_state["ai_notice"] = None
+        st.session_state["news_notice"] = None
         with st.spinner("抓取 FinMind 資料並計算技術指標..."):
             try:
                 bundle = fetch_stock_bundle(q)
                 chip10 = aggregate_chips(bundle.chips, bundle.prices)
                 qs = score_and_summary(bundle, chip10)
-                with st.spinner("Google Gemini 量化分析與新聞整理中..."):
-                    ai = call_gemini(bundle, chip10, qs)
+                ai = fallback_ai(bundle, chip10, qs)
                 st.session_state["last_bundle"] = bundle
                 st.session_state["last_chips"] = chip10
                 st.session_state["last_qs"] = qs
                 st.session_state["last_ai"] = ai
-                st.session_state["error"] = None
+                st.session_state["detail_loaded"] = False
+                st.session_state["news_loaded"] = False
             except Exception as exc:
                 st.session_state["error"] = str(exc)
 
     if st.session_state.get("error"):
         st.error(st.session_state["error"])
-        st.info("若是 Token 問題，請到 Streamlit Secrets 設定 FINMIND_TOKENS 與 GOOGLE_API_KEYS。")
         return
 
-    bundle: StockBundle = st.session_state.get("last_bundle")
+    bundle: StockBundle | None = st.session_state.get("last_bundle")
     if bundle is None:
         return
     chip10: pd.DataFrame = st.session_state["last_chips"]
     qs: dict[str, Any] = st.session_state["last_qs"]
     ai: dict[str, Any] = st.session_state["last_ai"]
+
+    if run_ai:
+        with st.spinner("Google Gemini 產生詳細分析中..."):
+            try:
+                ai = call_gemini_detail(bundle, chip10, qs, ai)
+                st.session_state["last_ai"] = ai
+                st.session_state["detail_loaded"] = True
+                st.session_state["ai_notice"] = ai.get("_ai_key_status", "Gemini 詳細分析已完成")
+            except Exception as exc:
+                st.session_state["ai_notice"] = f"{_compact_gemini_error(exc)}，目前維持規則版分析"
+
+    if run_news:
+        with st.spinner("Google Gemini 抓取近期重要新聞中..."):
+            try:
+                news = call_gemini_news(bundle, qs)
+                ai = dict(st.session_state["last_ai"])
+                ai["news"] = news
+                st.session_state["last_ai"] = ai
+                st.session_state["news_loaded"] = True
+                st.session_state["news_notice"] = "AI 新聞抓取已完成"
+            except Exception as exc:
+                st.session_state["news_notice"] = _compact_gemini_error(exc)
+
+    ai = st.session_state["last_ai"]
     latest = bundle.prices.iloc[-1]
     prev_close = float(latest["close"] - (latest.get("spread", 0) or 0)) if pd.notna(latest.get("spread")) else float(bundle.prices.iloc[-2]["close"])
     pct = (float(latest["close"]) - prev_close) / prev_close * 100 if prev_close else 0
@@ -701,78 +683,83 @@ def render_app() -> None:
     st.markdown(f"## {bundle.stock_name}（{bundle.stock_id}）AI 分析報告")
     st.caption(f"產業：{bundle.industry or '-'} ｜ 報告生成：{datetime.now().strftime('%Y-%m-%d %H:%M')} ｜ 整體狀態：{qs['status']}")
 
+    summary_text = ai.get("verdict") or fallback_ai(bundle, chip10, qs).get("verdict", "-")
+    summary_sub = []
+    summary_sub.append("目前為規則版數據分析" if not st.session_state.get("detail_loaded") else st.session_state.get("ai_notice", "AI 詳細分析已完成"))
+    if st.session_state.get("news_loaded"):
+        summary_sub.append(st.session_state.get("news_notice", "AI 新聞抓取已完成"))
+    st.markdown(f"<div class='summary-box'><div class='summary-title'>先看分析文字結論</div><div class='summary-text'>{summary_text}</div><div class='summary-sub'>{' ｜ '.join(summary_sub)}</div></div>", unsafe_allow_html=True)
+
     m1, m2, m3 = st.columns(3)
     with m1:
-        metric("即時收盤價", f"{float(latest['close']):g}", f"{'▲' if up else '▼'} {pct:+.2f}%")
+        metric("即時收盤價", f"{float(latest['close']):g}", f"{'▲' if up else '▼'} {pct:+.2f}%", tone="warm", value_kind="pos" if up else "neg", note_kind="pos" if up else "neg")
     with m2:
-        metric("成交量", f"{int(round(float(latest['volume']) / 1000)):,} 張", qs["volume_status"])
+        metric("成交量", f"{int(round(float(latest['volume']) / 1000)):,} 張", qs["volume_status"], tone="stone")
     with m3:
-        metric("偏多分數", f"{qs['score']} / 100", ai.get("tag", {}).get("reason", ""))
+        metric("偏多分數", f"{qs['score']} / 100", ai.get("tag", {}).get("reason", ""), tone="soft", value_kind="pos" if qs['status']=="偏多" else ("neg" if qs['status']=="偏空" else ""))
 
     st.markdown("### 🚦警示燈號")
-    kinds = ["green", "gold", "blue", "red"]
-    st.markdown("".join(badge(r, kinds[i % len(kinds)]) for i, r in enumerate(qs["reasons"])), unsafe_allow_html=True)
+    chip_sum = int(chip10["total"].sum()) if not chip10.empty else 0
+    kinds = []
+    for reason in qs["reasons"]:
+        if any(x in reason for x in ["多頭", "買超", "放量"]): kinds.append("pos")
+        elif any(x in reason for x in ["跌破", "賣超", "過熱", "偏弱"]): kinds.append("neg")
+        else: kinds.append("mid")
+    st.markdown("".join(badge(r, kinds[i] if i < len(kinds) else "mid") for i, r in enumerate(qs["reasons"])), unsafe_allow_html=True)
 
-    st.markdown("### 📈趨勢圖表（日 K 線）")
+    t_a, t_b, t_c, t_d = st.columns(4)
+    with t_a: metric("趨勢方向", qs["trend"], tone="sand", value_kind="pos" if qs['trend']=="多頭" else "neg")
+    with t_b: metric("RSI(14)", fmt_num(latest.get("rsi")), tone="cool")
+    with t_c: metric("MACD 狀態", qs["macd_status"], tone="soft", value_kind="pos" if "多頭" in qs['macd_status'] else "neg")
+    with t_d: metric("量能變化", qs["volume_status"], tone="stone")
+
+    st.markdown("<div class='section section-tech'><div class='section-title'>📈 技術圖表</div></div>", unsafe_allow_html=True)
+    st.markdown("<div class='plot-wrap'>", unsafe_allow_html=True)
     st.plotly_chart(plot_technical(bundle.prices), use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("### 📈技術面總覽")
-    t1, t2, t3, t4 = st.columns(4)
-    with t1: metric("趨勢方向", qs["trend"])
-    with t2: metric("RSI(14)", fmt_num(latest.get("rsi")))
-    with t3: metric("MACD 狀態", qs["macd_status"])
-    with t4: metric("量能變化", qs["volume_status"])
-    t5, t6, t7 = st.columns(3)
-    with t5: metric("MA5", fmt_num(latest.get("ma5")))
-    with t6: metric("MA20", fmt_num(latest.get("ma20")))
-    with t7: metric("MA60", fmt_num(latest.get("ma60")))
-
-    st.markdown("### 👥籌碼面動向")
     c1, c2, c3, c4 = st.columns(4)
     foreign = int(chip10.iloc[-1]["foreign"]) if not chip10.empty else 0
     trust = int(chip10.iloc[-1]["trust"]) if not chip10.empty else 0
     dealer = int(chip10.iloc[-1]["dealer"]) if not chip10.empty else 0
     total = int(chip10.iloc[-1]["total"]) if not chip10.empty else 0
-    with c1: metric("外資(千張)", f"{foreign:+,}")
-    with c2: metric("投信(千張)", f"{trust:+,}")
-    with c3: metric("自營商(千張)", f"{dealer:+,}")
-    with c4: metric("合計(千張)", f"{total:+,}")
+    st.markdown("<div class='section section-chip'><div class='section-title'>👥 籌碼面</div></div>", unsafe_allow_html=True)
+    cc1, cc2, cc3, cc4 = st.columns(4)
+    with cc1: metric("外資(千張)", f"{foreign:+,}", tone="cool", value_kind="pos" if foreign >= 0 else "neg")
+    with cc2: metric("投信(千張)", f"{trust:+,}", tone="cool", value_kind="pos" if trust >= 0 else "neg")
+    with cc3: metric("自營商(千張)", f"{dealer:+,}", tone="cool", value_kind="pos" if dealer >= 0 else "neg")
+    with cc4: metric("合計(千張)", f"{total:+,}", tone="cool", value_kind="pos" if total >= 0 else "neg")
+    st.markdown("<div class='plot-wrap'>", unsafe_allow_html=True)
     st.plotly_chart(plot_chips(chip10), use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("### 📊基本面")
+    st.markdown("<div class='section section-fund'><div class='section-title'>📊 基本面</div></div>", unsafe_allow_html=True)
     b1, b2, b3 = st.columns(3)
-    with b1: metric("最新月營收", rev["revenue"], f"營收月份 {rev.get('period', '-')}")
-    with b2: metric("YoY 年增率", rev["yoy"])
-    with b3: metric("MoM 月增率", rev["mom"])
+    with b1: metric("最新月營收", rev["revenue"], f"營收月份 {rev.get('period', '-')}", tone="sand")
+    with b2: metric("YoY 年增率", rev["yoy"], tone="sand", value_kind="pos" if str(rev['yoy']).startswith('+') else ("neg" if str(rev['yoy']).startswith('-') else ""))
+    with b3: metric("MoM 月增率", rev["mom"], tone="sand", value_kind="pos" if str(rev['mom']).startswith('+') else ("neg" if str(rev['mom']).startswith('-') else ""))
 
-    st.markdown("### 🎯關鍵價位")
-    l1, l2, l3, l4 = st.columns(4)
+    st.markdown("<div class='section section-neutral'><div class='section-title'>🎯 關鍵價位</div></div>", unsafe_allow_html=True)
     levels = ai.get("levels", qs["levels"])
-    with l1: metric("條件進場價", str(levels.get("entry", qs["levels"].get("entry"))))
-    with l2: metric("壓力區", str(levels.get("pressure", qs["levels"].get("pressure"))))
-    with l3: metric("支撐區", str(levels.get("support", qs["levels"].get("support"))))
-    with l4: metric("停損參考", str(levels.get("stop", qs["levels"].get("stop"))))
+    l1, l2, l3, l4 = st.columns(4)
+    with l1: metric("條件進場價", str(levels.get("entry", qs["levels"].get("entry"))), tone="warm")
+    with l2: metric("壓力區", str(levels.get("pressure", qs["levels"].get("pressure"))), tone="warm")
+    with l3: metric("支撐區", str(levels.get("support", qs["levels"].get("support"))), tone="warm")
+    with l4: metric("停損參考", str(levels.get("stop", qs["levels"].get("stop"))), tone="warm")
 
-    st.markdown("### ⭐整體結論")
-    st.markdown(f"<div class='ai-box'>{ai.get('verdict','-')}</div>", unsafe_allow_html=True)
-
-    st.markdown("### 🤖AI 智能解析")
-    col_left, col_right = st.columns([1, 1])
-    with col_left:
-        st.markdown("<div class='section'><div class='section-title'>技術面 / 籌碼面</div>", unsafe_allow_html=True)
-        st.write(ai.get("techConclusion", "-"))
-        st.write(ai.get("chipConclusion", "-"))
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("<div class='section'><div class='section-title'>短線操作建議</div>", unsafe_allow_html=True)
+    left, right = st.columns([1,1])
+    with left:
+        st.markdown("<div class='section section-ai'><div class='section-title'>🤖 AI 詳細解析</div>", unsafe_allow_html=True)
+        st.write(ai.get("techConclusion", "尚未執行 AI 詳細分析，目前顯示規則版摘要。"))
+        st.write(ai.get("chipConclusion", ""))
+        st.markdown("<b>短線操作建議</b>", unsafe_allow_html=True)
         for s in ai.get("suggestions", []):
             st.write(f"• {s}")
         st.markdown("</div>", unsafe_allow_html=True)
-    with col_right:
-        st.markdown("<div class='section'><div class='section-title'>可能路徑</div>", unsafe_allow_html=True)
+    with right:
+        st.markdown("<div class='section section-ai'><div class='section-title'>🧭 可能路徑與評分</div>", unsafe_allow_html=True)
         for p in ai.get("paths", []):
             st.write(f"**{p.get('type','')}**：{p.get('title','')}")
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("<div class='section'><div class='section-title'>評分</div>", unsafe_allow_html=True)
         ratings = ai.get("ratings", {})
         st.write(f"股價趨勢：{stars(ratings.get('trend', 3))}")
         st.write(f"技術面：{stars(ratings.get('tech', 3))}")
@@ -780,18 +767,20 @@ def render_app() -> None:
         st.write(f"操作難度：{stars(ratings.get('diff', 3))}")
         st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("### ⚠️風險評估")
+    st.markdown("<div class='section section-risk'><div class='section-title'>⚠️ 風險評估</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='warn-box'>{ai.get('warning','投資有風險，請審慎評估。')}</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("### 📰近期重要新聞")
+    st.markdown("<div class='section section-neutral'><div class='section-title'>📰 AI 新聞抓取</div>", unsafe_allow_html=True)
     news = ai.get("news", []) or []
     if news:
-        ncols = st.columns(4)
+        ncols = st.columns(2)
         for i, item in enumerate(news[:4]):
-            with ncols[i % 4]:
-                st.markdown(f"<div class='section'><b>{item.get('title','')}</b><br><span class='small-muted'>{item.get('source','市場新聞')} ｜ {item.get('date','')}</span></div>", unsafe_allow_html=True)
+            with ncols[i % 2]:
+                st.markdown(f"<div class='metric-card metric-stone'><div class='metric-label'>{item.get('source','市場新聞')} ｜ {item.get('date','')}</div><div style='font-size:1.12rem;font-weight:800;line-height:1.6'>{item.get('title','')}</div><div class='metric-note'>{item.get('summary','')}</div></div>", unsafe_allow_html=True)
     else:
-        st.info("Gemini 未回傳新聞；若要啟用新聞，請確認 GOOGLE_API_KEYS 與模型支援搜尋工具。")
+        st.info("尚未執行 AI 新聞抓取。若需要抓新聞，請按上方『AI 新聞抓取』按鈕。")
+    st.markdown("</div>", unsafe_allow_html=True)
 
     with st.expander("原始資料 / 除錯"):
         st.write("價格資料")
@@ -801,7 +790,7 @@ def render_app() -> None:
         st.write("月營收資料")
         st.dataframe(bundle.revenue.tail(12), use_container_width=True)
 
-    st.caption(f"📊資料來源：FinMind ｜ 🤖AI：Google Gemini ｜ Build：{APP_BUILD} ｜ ⚠️本報告僅供研究參考，不構成投資建議。")
+    st.caption(f"📊資料來源：FinMind ｜ 🤖AI：Google Gemini（按鈕觸發） ｜ Build：{APP_BUILD} ｜ ⚠️本報告僅供研究參考，不構成投資建議。")
 
 
 render_app()
