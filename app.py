@@ -7,6 +7,9 @@ import random
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
+from urllib.parse import quote_plus
+import re
+import xml.etree.ElementTree as ET
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -15,7 +18,7 @@ import requests
 import streamlit as st
 
 APP_TITLE = "台股 AI 個股分析"
-APP_BUILD = "2026-07-03-ui-layout-v6"
+APP_BUILD = "2026-07-03-ai-architecture-v7"
 FINMIND_API_URL = "https://api.finmindtrade.com/api/v4/data"
 EMBEDDED_FINMIND_TOKENS = ['eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZnJlZW9uZXllYXJhaSIsImVtYWlsIjoiZnJlZW9uZXllYXJhaUBnbWFpbC5jb20ifQ.QrpcS4DVlqm7bdsL-bDmGdNTtg8HKzm2rrwJUtf7v24', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiaG9kaWRpZmlubWluZCIsImVtYWlsIjoiaG9kaWRpQGdtYWlsLmNvbSJ9._w1f1blFk5cVtxYkQdArSPuP2nMbcj0ecB5WUOCp1d8', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiaG9kaWRpIiwiZW1haWwiOiJnZW1pbmkyMDI1MTA4QGdtYWlsLmNvbSJ9.hvVPA_bI3YdsapZTQ5m4bJsAeR61z1NgcXBZlm2m4lw', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiMjAyNWNoZW5jaGVuMjAyNSIsImVtYWlsIjoiMjAyNWNoZW5jaGVuMjAyNUBnbWFpbC5jb20ifQ.IcNKTcRbriGQOcRAH_y13Tif2aYxKjYv5cRtZVkoOHo']
 EMBEDDED_GOOGLE_API_KEYS = ['AIzaSyD41KegJf4ZV1ZpNI2sd4Kd1nJT1HBL_LA', 'AIzaSyD0Mxqd9g8RmAMN6oOSAqi9p8UfudRO8bI', 'AIzaSyAU_Y8Og0wI6HtWLwRNRW7TTGYzyhBlRSY']
@@ -418,33 +421,56 @@ def _compact_gemini_error(exc: Exception | None) -> str:
     return "Google Gemini 呼叫失敗"
 
 
+def _extract_json(text: str) -> dict[str, Any]:
+    text = (text or "").replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        m = re.search(r"\{.*\}", text, flags=re.S)
+        if not m:
+            raise
+        return json.loads(m.group(0))
+
+
 def _gemini_request(prompt: str, with_search: bool = False) -> dict[str, Any]:
     keys = get_google_keys()
-    if not keys: raise RuntimeError("沒有可用的 Google API key")
-    model = None
+    if not keys:
+        raise RuntimeError("沒有可用的 Google API key")
+    configured_model = None
     try:
-        model = st.secrets.get("GOOGLE_MODEL")
+        configured_model = st.secrets.get("GOOGLE_MODEL")
     except Exception:
-        model = None
-    model = model or os.getenv("GOOGLE_MODEL") or "gemini-2.5-flash"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    body = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "temperature": 0.35}}
-    if with_search:
-        body["tools"] = [{"google_search": {}}]
+        configured_model = None
+    configured_model = configured_model or os.getenv("GOOGLE_MODEL")
+    models = [configured_model] if configured_model else []
+    # 多模型備援：避免單一 preview / flash 名稱不可用時，看起來像按鈕沒反應。
+    models += ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    models = [m for i, m in enumerate(models) if m and m not in models[:i]]
+
     last_exc = None
-    for key in keys:
-        try:
-            r = requests.post(url, params={"key": key}, json=body, timeout=60)
-            r.raise_for_status()
-            result = r.json()
-            text = result["candidates"][0]["content"]["parts"][0]["text"]
-            text = text.replace("```json", "").replace("```", "").strip()
-            data = json.loads(text)
-            data["_ai_key_status"] = f"Gemini 已啟用；本次使用 API key 池第 {keys.index(key)+1} 組。"
-            return data
-        except Exception as exc:
-            last_exc = exc
-            continue
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        base_body = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.25},
+        }
+        tool_options = [True, False] if with_search else [False]
+        for use_tool in tool_options:
+            body = dict(base_body)
+            if use_tool:
+                body["tools"] = [{"google_search": {}}]
+            for key_idx, key in enumerate(keys, start=1):
+                try:
+                    r = requests.post(url, params={"key": key}, json=body, timeout=60)
+                    r.raise_for_status()
+                    result = r.json()
+                    text = result["candidates"][0]["content"]["parts"][0]["text"]
+                    data = _extract_json(text)
+                    data["_ai_key_status"] = f"Gemini 已啟用；模型 {model}；本次使用 API key 池第 {key_idx} 組。"
+                    return data
+                except Exception as exc:
+                    last_exc = exc
+                    continue
     raise RuntimeError(_compact_gemini_error(last_exc))
 
 
@@ -477,15 +503,43 @@ JSON schema:
     return merged
 
 
+def fetch_google_news_rss(bundle: StockBundle, limit: int = 6) -> list[dict[str, Any]]:
+    """Public RSS fallback. This makes the news button visibly return content even if Gemini search is rate-limited."""
+    query = quote_plus(f"{bundle.stock_name} {bundle.stock_id} 台股 OR 股票")
+    url = f"https://news.google.com/rss/search?q={query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    try:
+        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        root = ET.fromstring(r.content)
+        items = []
+        for item in root.findall(".//item")[:limit]:
+            title = item.findtext("title", default="").strip()
+            pub = item.findtext("pubDate", default="").strip()
+            source_el = item.find("source")
+            source = source_el.text.strip() if source_el is not None and source_el.text else "Google News"
+            if title:
+                items.append({"title": title, "source": source, "date": pub, "summary": "RSS 抓取結果；按 AI 新聞抓取會優先顯示可用新聞，Gemini 可用時再輔助整理。"})
+        return items
+    except Exception:
+        return []
+
+
 def call_gemini_news(bundle: StockBundle, qs: dict[str, Any]) -> list[dict[str, Any]]:
-    payload = {"stock": {"id": bundle.stock_id, "name": bundle.stock_name, "industry": bundle.industry}, "quant": qs}
+    rss_news = fetch_google_news_rss(bundle, limit=6)
+    payload = {"stock": {"id": bundle.stock_id, "name": bundle.stock_name, "industry": bundle.industry}, "quant": qs, "rss_news": rss_news}
     prompt = f"""
-請使用繁體中文，搜尋並整理這檔台股最近 4 則重要新聞，只輸出 JSON，不要輸出 markdown。
+請使用繁體中文，根據提供的 RSS 新聞候選與股票資料，整理這檔台股最近 4 則重要新聞。只輸出 JSON，不要輸出 markdown。
+若 RSS 候選為空，請回傳空陣列，不要捏造新聞。
 JSON schema: {{"news":[{{"title":"新聞標題","source":"媒體來源","date":"發布時間","summary":"一句話摘要"}}]}}
-資料：{json.dumps(payload, ensure_ascii=False)}
+資料：{json.dumps(payload, ensure_ascii=False, default=str)}
 """.strip()
-    data = _gemini_request(prompt, with_search=True)
-    return data.get("news", []) if isinstance(data, dict) else []
+    try:
+        data = _gemini_request(prompt, with_search=False)
+        news = data.get("news", []) if isinstance(data, dict) else []
+        return news or rss_news[:4]
+    except Exception:
+        # Gemini 失敗時仍顯示 RSS 結果，避免使用者覺得按鈕沒反應。
+        return rss_news[:4]
 
 
 def fmt_num(x: Any, digits: int = 2) -> str:
@@ -571,22 +625,24 @@ def render_app() -> None:
         st.markdown("<div class='small-muted' style='padding-top:.35rem;font-weight:700'>股票代號或中文名稱</div>", unsafe_allow_html=True)
     with q_box:
         q = st.text_input("股票代號或中文名稱", value=st.session_state.get("query", "2330"), label_visibility="collapsed", placeholder="例如：2330、台積電、友達")
-    b1, b2, b3 = st.columns(3)
-    with b1:
+    mode_col, run_col = st.columns([2.6, 1])
+    with mode_col:
+        ai_mode = st.selectbox(
+            "分析模式",
+            ["數據分析｜不呼叫 API", "數據 + AI 詳細分析", "數據 + AI 新聞抓取", "數據 + AI 詳細 + 新聞"],
+            index=0,
+            key="analysis_mode",
+        )
+    with run_col:
+        st.write("")
         st.markdown("<div class='top-btn-row primary'>", unsafe_allow_html=True)
-        run = st.button("SYSTEM START / 分析", use_container_width=True, key="btn_run_data")
+        run = st.button("執行分析", use_container_width=True, key="btn_run_all")
         st.markdown("</div>", unsafe_allow_html=True)
-    with b2:
-        st.markdown("<div class='top-btn-row secondary'>", unsafe_allow_html=True)
-        run_ai = st.button("AI 詳細分析", use_container_width=True, key="btn_run_ai")
-        st.markdown("</div>", unsafe_allow_html=True)
-    with b3:
-        st.markdown("<div class='top-btn-row tertiary'>", unsafe_allow_html=True)
-        run_news = st.button("AI 新聞抓取", use_container_width=True, key="btn_run_news")
-        st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("<div class='footer-tip'>預設只跑數據分析，不會主動呼叫 Google API。若需要深入 AI 解析或新聞，再按上方獨立按鈕。</div></div>", unsafe_allow_html=True)
+    st.markdown("<div class='footer-tip'>新版架構改成『選模式 → 執行分析』，避免 Streamlit 按鈕 rerun 後看起來沒反應。AI 若失敗，區塊會顯示原因並保留規則版分析。</div></div>", unsafe_allow_html=True)
 
     q_changed = q != st.session_state.get("query")
+    run_detail = run and ("詳細" in ai_mode)
+    run_news = run and ("新聞" in ai_mode)
     if run or "last_bundle" not in st.session_state or q_changed:
         st.session_state["query"] = q
         st.session_state["error"] = None
@@ -618,7 +674,7 @@ def render_app() -> None:
     qs: dict[str, Any] = st.session_state["last_qs"]
     ai: dict[str, Any] = st.session_state["last_ai"]
 
-    if run_ai:
+    if run_detail:
         with st.spinner("Google Gemini 產生詳細分析中..."):
             try:
                 ai = call_gemini_detail(bundle, chip10, qs, ai)
@@ -629,14 +685,14 @@ def render_app() -> None:
                 st.session_state["ai_notice"] = f"{_compact_gemini_error(exc)}，目前維持規則版分析"
 
     if run_news:
-        with st.spinner("Google Gemini 抓取近期重要新聞中..."):
+        with st.spinner("抓取近期重要新聞中；Gemini 可用時會輔助整理..."):
             try:
                 news = call_gemini_news(bundle, qs)
                 ai = dict(st.session_state["last_ai"])
                 ai["news"] = news
                 st.session_state["last_ai"] = ai
                 st.session_state["news_loaded"] = True
-                st.session_state["news_notice"] = "AI 新聞抓取已完成"
+                st.session_state["news_notice"] = "新聞抓取已完成；Gemini 可用時已輔助整理，否則顯示 RSS 結果"
             except Exception as exc:
                 st.session_state["news_notice"] = _compact_gemini_error(exc)
 
