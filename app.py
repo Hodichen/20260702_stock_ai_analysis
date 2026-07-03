@@ -15,6 +15,7 @@ import requests
 import streamlit as st
 
 APP_TITLE = "台股 AI 個股分析"
+APP_BUILD = "2026-07-03-revenue-volume-fix-v2"
 FINMIND_API_URL = "https://api.finmindtrade.com/api/v4/data"
 
 # Direct GitHub upload build: API pools are embedded per user request.
@@ -266,28 +267,96 @@ def aggregate_chips(chips: pd.DataFrame, price: pd.DataFrame) -> pd.DataFrame:
 
 
 def latest_revenue(revenue: pd.DataFrame) -> dict[str, Any]:
+    """Return latest monthly revenue and calculated YoY/MoM.
+
+    FinMind TaiwanStockMonthRevenue fields are usually:
+    - revenue: monthly revenue amount in NTD
+    - revenue_year: the revenue year, for example 2026
+    - revenue_month: the revenue month, for example 5
+
+    revenue_year / revenue_month are identifiers, NOT percentages. This function
+    creates a YYYY-MM period from revenue_year + revenue_month first, then compares:
+    - YoY: latest month vs same month last year
+    - MoM: latest month vs previous month
+    """
+    blank = {"revenue": "-", "yoy": "-", "mom": "-", "period": "-"}
     if revenue.empty:
-        return {"revenue": "-", "yoy": "-", "mom": "-"}
-    df = revenue.copy().sort_values("date")
+        return blank
+
+    df = revenue.copy()
+
+    # Find revenue column. Keep several fallbacks for manually uploaded CSV variants.
+    rev_col = None
+    for c in ["revenue", "營業收入-當月營收", "當月營收", "monthly_revenue"]:
+        if c in df.columns:
+            rev_col = c
+            break
+    if rev_col is None:
+        return blank
+
+    df["_revenue"] = (
+        df[rev_col]
+        .astype(str)
+        .str.replace(",", "", regex=False)
+        .str.replace("--", "", regex=False)
+    )
+    df["_revenue"] = pd.to_numeric(df["_revenue"], errors="coerce")
+
+    # Prefer revenue_year/revenue_month, because FinMind date can be the publish
+    # month while revenue_month is the actual operating month.
+    if {"revenue_year", "revenue_month"}.issubset(df.columns):
+        df["_year"] = pd.to_numeric(df["revenue_year"], errors="coerce")
+        df["_month"] = pd.to_numeric(df["revenue_month"], errors="coerce")
+    else:
+        dt = pd.to_datetime(df.get("date"), errors="coerce") if "date" in df.columns else pd.Series(pd.NaT, index=df.index)
+        df["_year"] = dt.dt.year
+        df["_month"] = dt.dt.month
+
+    df = df.dropna(subset=["_revenue", "_year", "_month"]).copy()
+    if df.empty:
+        return blank
+
+    df["_year"] = df["_year"].astype(int)
+    df["_month"] = df["_month"].astype(int)
+    df = df[(df["_month"] >= 1) & (df["_month"] <= 12)]
+    if df.empty:
+        return blank
+
+    # Deduplicate by month, keep latest row if there are revisions.
+    df["_period_no"] = df["_year"] * 12 + df["_month"]
+    df = df.sort_values(["_period_no"]).drop_duplicates("_period_no", keep="last").reset_index(drop=True)
+
     row = df.iloc[-1]
-    # FinMind fields vary: revenue, revenue_month, revenue_year, stock_id, date, country, ...
-    rev_val = row.get("revenue") or row.get("當月營收") or row.get("營業收入-當月營收")
-    try:
-        rev = float(rev_val) / 100000000
-        rev_str = f"{rev:,.2f} 億"
-    except Exception:
-        rev_str = "-"
-    def fmt(x: Any) -> str:
+    cur_rev = float(row["_revenue"])
+    year = int(row["_year"])
+    month = int(row["_month"])
+    rev_str = f"{cur_rev / 100000000:,.2f} 億"
+
+    def pct(cur: float, base: Any) -> str:
         try:
-            return f"{float(x):+.2f}%"
+            base_f = float(base)
+            if not math.isfinite(base_f) or base_f == 0:
+                return "-"
+            return f"{(cur / base_f - 1) * 100:+.2f}%"
         except Exception:
             return "-"
+
+    # MoM: exact previous calendar month.
+    prev_period = int(row["_period_no"]) - 1
+    prev_rows = df[df["_period_no"] == prev_period]
+    mom_base = prev_rows["_revenue"].iloc[-1] if not prev_rows.empty else None
+
+    # YoY: same month previous year.
+    yoy_period = int(row["_period_no"]) - 12
+    yoy_rows = df[df["_period_no"] == yoy_period]
+    yoy_base = yoy_rows["_revenue"].iloc[-1] if not yoy_rows.empty else None
+
     return {
         "revenue": rev_str,
-        "yoy": fmt(row.get("revenue_year") or row.get("YoY")),
-        "mom": fmt(row.get("revenue_month") or row.get("MoM")),
+        "yoy": pct(cur_rev, yoy_base),
+        "mom": pct(cur_rev, mom_base),
+        "period": f"{year}-{month:02d}",
     }
-
 
 def round_tick(x: float) -> float:
     if not math.isfinite(x):
@@ -490,7 +559,19 @@ JSON schema:
                 last_exc = exc
                 continue
     res = fallback_ai(bundle, chip10, qs)
-    res["verdict"] = res["verdict"] + f"（Gemini 呼叫失敗，已使用規則版分析：{last_exc}）"
+    def _compact_gemini_error(exc: Exception | None) -> str:
+        msg = str(exc or "")
+        if "429" in msg or "Too Many Requests" in msg:
+            return "Google Gemini API 額度或速率限制，已改用規則版分析"
+        if "403" in msg:
+            return "Google Gemini API 權限或 key 限制，已改用規則版分析"
+        if "404" in msg:
+            return "Google Gemini 模型名稱可能不可用，已改用規則版分析"
+        if not msg:
+            return "Google Gemini 暫時無法回應，已改用規則版分析"
+        return "Google Gemini 呼叫失敗，已改用規則版分析"
+
+    res["verdict"] = res["verdict"] + f"（{_compact_gemini_error(last_exc)}）"
     return res
 
 
@@ -624,7 +705,7 @@ def render_app() -> None:
     with m1:
         metric("即時收盤價", f"{float(latest['close']):g}", f"{'▲' if up else '▼'} {pct:+.2f}%")
     with m2:
-        metric("成交量", f"{int(float(latest['volume'])):,} 張", qs["volume_status"])
+        metric("成交量", f"{int(round(float(latest['volume']) / 1000)):,} 張", qs["volume_status"])
     with m3:
         metric("偏多分數", f"{qs['score']} / 100", ai.get("tag", {}).get("reason", ""))
 
@@ -660,7 +741,7 @@ def render_app() -> None:
 
     st.markdown("### 📊基本面")
     b1, b2, b3 = st.columns(3)
-    with b1: metric("最新月營收", rev["revenue"])
+    with b1: metric("最新月營收", rev["revenue"], f"營收月份 {rev.get('period', '-')}")
     with b2: metric("YoY 年增率", rev["yoy"])
     with b3: metric("MoM 月增率", rev["mom"])
 
@@ -720,7 +801,7 @@ def render_app() -> None:
         st.write("月營收資料")
         st.dataframe(bundle.revenue.tail(12), use_container_width=True)
 
-    st.caption("📊資料來源：FinMind ｜ 🤖AI：Google Gemini ｜ ⚠️本報告僅供研究參考，不構成投資建議。")
+    st.caption(f"📊資料來源：FinMind ｜ 🤖AI：Google Gemini ｜ Build：{APP_BUILD} ｜ ⚠️本報告僅供研究參考，不構成投資建議。")
 
 
 render_app()
