@@ -18,10 +18,16 @@ import requests
 import streamlit as st
 
 APP_TITLE = "台股 AI 個股分析"
-APP_BUILD = "2026-07-03-ai-architecture-v8"
+APP_BUILD = "2026-07-03-ai-architecture-v8.3"
 FINMIND_API_URL = "https://api.finmindtrade.com/api/v4/data"
 EMBEDDED_FINMIND_TOKENS = ['eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZnJlZW9uZXllYXJhaSIsImVtYWlsIjoiZnJlZW9uZXllYXJhaUBnbWFpbC5jb20ifQ.QrpcS4DVlqm7bdsL-bDmGdNTtg8HKzm2rrwJUtf7v24', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiaG9kaWRpZmlubWluZCIsImVtYWlsIjoiaG9kaWRpQGdtYWlsLmNvbSJ9._w1f1blFk5cVtxYkQdArSPuP2nMbcj0ecB5WUOCp1d8', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiaG9kaWRpIiwiZW1haWwiOiJnZW1pbmkyMDI1MTA4QGdtYWlsLmNvbSJ9.hvVPA_bI3YdsapZTQ5m4bJsAeR61z1NgcXBZlm2m4lw', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiMjAyNWNoZW5jaGVuMjAyNSIsImVtYWlsIjoiMjAyNWNoZW5jaGVuMjAyNUBnbWFpbC5jb20ifQ.IcNKTcRbriGQOcRAH_y13Tif2aYxKjYv5cRtZVkoOHo']
-EMBEDDED_GOOGLE_API_KEYS = ['AIzaSyD41KegJf4ZV1ZpNI2sd4Kd1nJT1HBL_LA', 'AIzaSyD0Mxqd9g8RmAMN6oOSAqi9p8UfudRO8bI', 'AIzaSyAU_Y8Og0wI6HtWLwRNRW7TTGYzyhBlRSY']
+
+# 放入新版 AQ. 開頭的 API Keys
+EMBEDDED_GOOGLE_API_KEYS = [
+    'AQ.Ab8RN6L8qMFIgsR_YrTGJHDc99lrTWorktBlHmEbdLmN4OG3Zw',
+    'AQ.Ab8RN6JJvD3M-loa7-rUojT1Prb29n5H9vGeY2UbCE9WaPA0DQ',
+    'AQ.Ab8RN6IFJsYVjPA2ajI8TAvigRmvtTxdDlnFhTPqZt4P_1WO2w'
+]
 
 st.set_page_config(page_title=APP_TITLE, page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
@@ -414,12 +420,13 @@ def get_google_keys() -> list[str]:
 
 def _compact_gemini_error(exc: Exception | None) -> str:
     msg = str(exc or "")
-    if "429" in msg or "Too Many Requests" in msg: return f"Google API 額度或速率限制 ({msg[:60]})"
-    if "403" in msg: return f"Google API 權限或 key 限制 ({msg[:60]})"
-    if "404" in msg: return f"Google API 模型名稱可能不可用 ({msg[:60]})"
-    if "400" in msg: return f"Google API 參數錯誤或不支援工具格式 ({msg[:60]})"
+    # v8.3: 取消字數限制，完整顯示 Google 回傳的錯誤，方便除錯
+    if "429" in msg or "Too Many Requests" in msg: return f"Google API 額度或速率限制 (HTTP 429): {msg}"
+    if "403" in msg: return f"Google API 權限限制 (HTTP 403): {msg}"
+    if "404" in msg: return f"Google API 模型名稱錯誤 (HTTP 404): {msg}"
+    if "400" in msg: return f"Google API 參數錯誤或不支援工具格式 (HTTP 400): {msg}"
     if not msg: return "Google Gemini 暫時無法回應"
-    return f"Google Gemini 呼叫失敗: {msg[:60]}"
+    return f"Google Gemini 呼叫失敗: {msg}"
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -459,15 +466,29 @@ def _gemini_request(prompt: str, with_search: bool = False) -> dict[str, Any]:
                 "generationConfig": {"temperature": 0.25}
             }
             if use_tool:
-                # 使用駝峰命名 googleSearch 以符合 Google REST API 規範
+                # v8.3 修正: 確保工具格式為最保險的寫法
                 body["tools"] = [{"googleSearch": {}}]
             else:
-                # 只有在沒用 Search 時強制套用 JSON mode，避免部分模型產生格式衝突
                 body["generationConfig"]["responseMimeType"] = "application/json"
                 
             for key_idx, key in enumerate(keys, start=1):
                 try:
+                    # ✅ v8.3: 依序嘗試三種可能的驗證方法
+                    r = None
+                    
+                    # 嘗試 1: 標準 URL Parameter 驗證 (?key=)
                     r = requests.post(url, params={"key": key}, json=body, timeout=60)
+                    
+                    # 嘗試 2: 如果 400 (API Key Invalid) 或 401，改用 Header 驗證 (x-goog-api-key)
+                    if r.status_code in [400, 401] and ("API_KEY_INVALID" in r.text or "API key not valid" in r.text or "key" in r.text.lower()):
+                        headers = {"x-goog-api-key": key, "Content-Type": "application/json"}
+                        r = requests.post(url, headers=headers, json=body, timeout=60)
+                        
+                    # 嘗試 3: 如果還是 400 且疑似 Token，改用 OAuth Bearer
+                    if r.status_code in [400, 401, 403] and ("API_KEY" in r.text or "unauthorized" in r.text.lower() or "credential" in r.text.lower()):
+                        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+                        r = requests.post(url, headers=headers, json=body, timeout=60)
+
                     if r.status_code != 200:
                         raise Exception(f"HTTP {r.status_code}: {r.text}")
                     
@@ -632,23 +653,40 @@ def run_api_test():
         st.markdown(f"**Key {idx}** (`{key[:5]}...{key[-5:]}`)")
         url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
         
-        # 測試 1: 基本生成 (不含 Tools)
+        # v8.3: 測試 1 (基本生成)，自動切換三種驗證
         try:
             r1 = requests.post(url, params={"key": key}, json={"contents": [{"parts": [{"text": "hi"}]}]}, timeout=15)
+            auth_used = "?key="
+            
+            if r1.status_code in [400, 401]:
+                headers = {"x-goog-api-key": key, "Content-Type": "application/json"}
+                r1 = requests.post(url, headers=headers, json={"contents": [{"parts": [{"text": "hi"}]}]}, timeout=15)
+                auth_used = "x-goog-api-key"
+                
+            if r1.status_code in [400, 401, 403] and ("API_KEY" in r1.text or "unauthorized" in r1.text.lower()):
+                headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+                r1 = requests.post(url, headers=headers, json={"contents": [{"parts": [{"text": "hi"}]}]}, timeout=15)
+                auth_used = "Bearer Token"
+
             if r1.status_code == 200:
-                st.success(f"✅ 基本生成 (gemini-1.5-flash): 成功")
+                st.success(f"✅ 基本生成 (gemini-1.5-flash): 成功 (驗證方式: {auth_used})")
             else:
-                st.error(f"❌ 基本生成失敗 (HTTP {r1.status_code}): {r1.text[:150]}")
+                st.error(f"❌ 基本生成失敗 (HTTP {r1.status_code})\n\n**詳細錯誤內容：**\n```json\n{r1.text}\n```")
         except Exception as e:
             st.error(f"❌ 基本連線錯誤: {e}")
             
-        # 測試 2: Search Grounding
+        # v8.3: 測試 2 (新聞搜尋)
         try:
             r2 = requests.post(url, params={"key": key}, json={"contents": [{"parts": [{"text": "hi"}]}], "tools": [{"googleSearch": {}}]}, timeout=15)
+            if r2.status_code in [400, 401]:
+                r2 = requests.post(url, headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json={"contents": [{"parts": [{"text": "hi"}]}], "tools": [{"googleSearch": {}}]}, timeout=15)
+            if r2.status_code in [400, 401, 403] and ("API_KEY" in r2.text or "unauthorized" in r2.text.lower()):
+                r2 = requests.post(url, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, json={"contents": [{"parts": [{"text": "hi"}]}], "tools": [{"googleSearch": {}}]}, timeout=15)
+
             if r2.status_code == 200:
                 st.success(f"✅ 新聞搜尋 (googleSearch): 成功")
             else:
-                st.warning(f"⚠️ 新聞搜尋失敗 (HTTP {r2.status_code}): {r2.text[:150]}")
+                st.warning(f"⚠️ 新聞搜尋失敗 (HTTP {r2.status_code})\n\n**詳細錯誤內容：**\n```json\n{r2.text}\n```")
         except Exception as e:
             st.warning(f"⚠️ 新聞搜尋連線錯誤: {e}")
 
@@ -726,7 +764,7 @@ def render_app() -> None:
                 st.session_state["detail_loaded"] = True
                 st.session_state["ai_notice"] = "AI 詳細分析已完成：" + ai.get("_ai_key_status", "Gemini 已回傳結果")
             except Exception as exc:
-                st.session_state["ai_notice"] = f"{_compact_gemini_error(exc)}，目前維持規則版分析"
+                st.session_state["ai_notice"] = f"{_compact_gemini_error(exc)}"
 
     if run_news:
         with st.spinner("抓取近期重要新聞中；Gemini 可用時會輔助整理..."):
@@ -787,7 +825,7 @@ def render_app() -> None:
     with ai_left:
         st.markdown("<div class='ai-mini-box'>" + section_title("🧠", "AI 詳細分析") , unsafe_allow_html=True)
         if st.session_state.get("ai_notice"):
-            notice_class = "status-warn" if "限制" in str(st.session_state.get("ai_notice")) or "失敗" in str(st.session_state.get("ai_notice")) or "錯誤" in str(st.session_state.get("ai_notice")) else ""
+            notice_class = "status-warn" if "限制" in str(st.session_state.get("ai_notice")) or "失敗" in str(st.session_state.get("ai_notice")) or "錯誤" in str(st.session_state.get("ai_notice")) or "無效" in str(st.session_state.get("ai_notice")) else ""
             st.markdown(f"<div class='status-box {notice_class}'>{st.session_state.get('ai_notice')}</div>", unsafe_allow_html=True)
         else:
             st.markdown("<div class='status-box'>尚未執行 AI 詳細分析。按上方按鈕後，結果會顯示在這裡。</div>", unsafe_allow_html=True)
@@ -800,7 +838,7 @@ def render_app() -> None:
     with ai_right:
         st.markdown("<div class='ai-mini-box'>" + section_title("📰", "AI 新聞抓取") , unsafe_allow_html=True)
         if st.session_state.get("news_notice"):
-            notice_class = "status-warn" if "限制" in str(st.session_state.get("news_notice")) or "失敗" in str(st.session_state.get("news_notice")) or "錯誤" in str(st.session_state.get("news_notice")) else ""
+            notice_class = "status-warn" if "限制" in str(st.session_state.get("news_notice")) or "失敗" in str(st.session_state.get("news_notice")) or "錯誤" in str(st.session_state.get("news_notice")) or "無效" in str(st.session_state.get("news_notice")) else ""
             st.markdown(f"<div class='status-box {notice_class}'>{st.session_state.get('news_notice')}</div>", unsafe_allow_html=True)
         else:
             st.markdown("<div class='status-box'>尚未執行 AI 新聞抓取。按上方按鈕後，新聞會顯示在這裡。</div>", unsafe_allow_html=True)
